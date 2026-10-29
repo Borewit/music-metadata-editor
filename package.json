@@ -1,0 +1,73 @@
+{
+  "name": "music-metadata-editor",
+  "version": "0.1.0",
+  "description": "Write metadata to common audio files",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "audio",
+    "metadata",
+    "tags",
+    "flac",
+    "vorbis",
+    "id3",
+    "mp3"
+  ],
+  "author": {
+    "name": "Borewit",
+    "url": "https://github.com/Borewit"
+  },
+  "funding": [
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/Borewit"
+    },
+    {
+      "type": "buymeacoffee",
+      "url": "https://buymeacoffee.com/borewit"
+    }
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@borewit/text-codec": "^0.2.2",
+    "strtok3": "^10.6.2",
+    "token-types": "^6.1.2"
+  },
+  "repository": "github:Borewit/music-metadata-editor",
+  "peerDependencies": {
+    "music-metadata": "^12.3.2"
+  },
+  "peerDependenciesMeta": {
+    "music-metadata": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "music-metadata": "^12.3.2",
+    "typescript": "^5.9.0",
+    "vitest": "^3.0.0"
+  }
+}
