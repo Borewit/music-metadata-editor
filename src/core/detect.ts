@@ -2,7 +2,7 @@ import { fileTypeFromTokenizer } from 'file-type';
 import { EndOfStreamError, type ITokenizer } from 'strtok3';
 import type { ByteSource } from './source.js';
 
-export type ContainerFormat = 'flac' | 'id3' | 'mp3' | 'wav' | 'unknown';
+export type ContainerFormat = 'flac' | 'id3' | 'mp3' | 'wav' | 'mp4' | 'unknown';
 
 /** Detect audio containers using file-type without loading the entire file. */
 export async function detectFormat(source: ByteSource): Promise<ContainerFormat> {
@@ -35,6 +35,7 @@ export async function detectFormat(source: ByteSource): Promise<ContainerFormat>
   } catch (error) {
     if (!(error instanceof EndOfStreamError)) throw error;
   }
+  if (extension === 'm4a' || extension === 'mp4' || extension === 'm4b') return 'mp4';
   if (extension === 'flac' || extension === 'mp3' || extension === 'wav') return extension;
 
   // Route incomplete or unsupported ID3 input to the writer for validation.
