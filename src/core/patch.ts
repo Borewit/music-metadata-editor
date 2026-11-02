@@ -47,10 +47,10 @@ export function normalizeComments(
     if (typeof entry === 'string') {
       return { text: entry };
     }
-    if (typeof entry !== 'object' || entry === null || typeof entry.text !== 'string') {
+    if (typeof entry !== 'object' || entry === null || (entry.text !== undefined && typeof entry.text !== 'string')) {
       throw new InvalidPatchError('Each comment must be a string or an object with a text property');
     }
-    return { ...entry };
+    return { ...entry, text: entry.text ?? '' };
   });
 }
 

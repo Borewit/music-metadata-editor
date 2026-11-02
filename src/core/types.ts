@@ -14,10 +14,7 @@ export type TextPatch = string | readonly string[] | null;
  *
  * A missing property is left untouched; `null` removes it.
  */
-export interface NumberPairPatch {
-  no?: number | null;
-  of?: number | null;
-}
+export type NumberPairPatch = Partial<ICommonTagsResult['track']>;
 
 /**
  * Track or disc number as returned by `music-metadata`.
@@ -34,6 +31,8 @@ export interface Picture extends IPicture {
   /** Image height in pixels, when known. */
   height?: number;
   /** Bits per pixel, when known. */
+  colour_depth?: number;
+  indexed_color?: number;
   colourDepth?: number;
   /** Number of colours for indexed images, when known. */
   colours?: number;
@@ -43,13 +42,9 @@ export interface Picture extends IPicture {
  * Comment value accepted by a patch.
  *
  * This is structurally compatible with `music-metadata`'s `IComment`, but
- * requires `text` because a patch without text has nothing to write.
+ * permits descriptor-only comments, matching reader results.
  */
-export interface Comment {
-  text: string;
-  descriptor?: string;
-  language?: string;
-}
+export type Comment = NonNullable<ICommonTagsResult['comment']>[number];
 
 /**
  * Common tag patch.
@@ -58,7 +53,18 @@ export interface Comment {
  * caller can round-trip values read by `music-metadata` without a translation
  * table.
  */
-export interface TagPatch {
+interface CustomTagPatch {
+  notes?: TextPatch;
+  barcode?: TextPatch;
+  releasecountry?: TextPatch;
+  asin?: TextPatch;
+  albumartistsort?: TextPatch;
+  artistsort?: TextPatch;
+  script?: TextPatch;
+  releasestatus?: TextPatch;
+  releasetype?: TextPatch;
+  acoustid_id?: TextPatch;
+  rating?: Readonly<NonNullable<ICommonTagsResult['rating']>> | null;
   title?: TextPatch;
   artist?: TextPatch;
   artists?: TextPatch;
@@ -91,8 +97,9 @@ export interface TagPatch {
   grouping?: TextPatch;
   subtitle?: TextPatch;
   website?: TextPatch;
-  lyrics?: TextPatch;
+  lyrics?: TextPatch | readonly Comment[] | ICommonTagsResult['lyrics'];
   picture?: readonly Picture[] | null;
+  movementIndex?: NumberPairPatch | null;
   track?: NumberPairPatch | null;
   disk?: NumberPairPatch | null;
   /** MusicBrainz recording identifier (the Vorbis `MUSICBRAINZ_TRACKID` field). */
@@ -110,20 +117,32 @@ export interface TagPatch {
   /** MusicBrainz work identifier. */
   musicbrainz_workid?: TextPatch;
   /** ReplayGain track gain, e.g. `-6.20 dB`. */
-  replaygain_track_gain?: TextPatch;
+  replaygain_track_gain?: TextPatch | ICommonTagsResult['replaygain_track_gain'];
   /** ReplayGain track peak, e.g. `0.988`. */
-  replaygain_track_peak?: TextPatch;
+  replaygain_track_peak?: TextPatch | ICommonTagsResult['replaygain_track_peak'];
   /** ReplayGain album gain, e.g. `-6.20 dB`. */
-  replaygain_album_gain?: TextPatch;
+  replaygain_album_gain?: TextPatch | ICommonTagsResult['replaygain_album_gain'];
   /** ReplayGain album peak, e.g. `0.988`. */
-  replaygain_album_peak?: TextPatch;
+  replaygain_album_peak?: TextPatch | ICommonTagsResult['replaygain_album_peak'];
   /**
    * Format-native fields, applied after the common mapping.
    *
-   * For FLAC these are Vorbis Comment field names (case-insensitive), e.g.
+   * For MP3 use frame IDs (TXXX:description for user text), structured native
+   * objects for APIC/COMM/USLT/UFID/POPM/TIPL/TMCL, or raw Uint8Array bodies
+   * for binary frames. For FLAC use Vorbis Comment field names, e.g.
    * `{ "MY_FIELD": "value" }`. Use `null` to remove a field.
    */
-  native?: Readonly<Record<string, string | readonly string[] | null>> | null;
+  native?: Readonly<
+    Record<
+      string,
+      | string
+      | readonly string[]
+      | Uint8Array
+      | Readonly<Record<string, unknown>>
+      | readonly Readonly<Record<string, unknown>>[]
+      | null
+    >
+  > | null;
 }
 
 /**
@@ -132,16 +151,31 @@ export interface TagPatch {
  * The default keeps existing padding when possible and adds 8192 bytes when a
  * rewrite is required. Set to `0` to remove padding.
  */
+type CommonPatch = { [K in keyof ICommonTagsResult]?: ICommonTagsResult[K] | null };
+
+/** All reader common fields are accepted, plus the editor's patch conveniences. */
+export type TagPatch = Omit<CommonPatch, keyof CustomTagPatch> & CustomTagPatch;
+
 export type PaddingOption = number;
 
 export interface WriteOptions {
+  /**
+   * Discard the existing leading ID3v2.2/2.3/2.4 tag and trailing ID3v1 tag
+   * before writing the patch as ID3v2.4. In WAV, replaces the ID3 chunk contents.
+   * Unspecified ID3 fields are lost.
+   * Other trailing metadata (such as APE) is preserved. MP3 and WAV ID3 chunks only.
+   */
+  replaceId3?: boolean;
+  /** Remove a nonstandard leading ID3 tag when rewriting FLAC metadata. */
+  stripFlacId3?: boolean;
   /**
    * Target amount of padding to keep or add, in bytes. Defaults to 8192.
    */
   padding?: PaddingOption;
   /**
    * Write through a temporary file and rename it into place. Defaults to
-   * `true`. Only applies to `updateFile`.
+   * `true`. Only applies to `updateFile`. When false, stage output in memory
+   * and overwrite the existing file in place; this is not crash-atomic.
    */
   atomic?: boolean;
   /**
@@ -156,14 +190,14 @@ export interface WriteOptions {
 }
 
 /**
- * Result of a write operation.
+ * Result of a FLAC, MP3 or WAV write operation.
  */
 export interface WriteResult {
   /** Container format that was written. */
-  format: 'flac';
+  format: 'flac' | 'mp3' | 'wav';
   /** Total number of bytes in the resulting file. */
   bytesWritten: number;
-  /** Padding bytes in the resulting FLAC metadata section. */
+  /** Padding bytes in the resulting metadata section. */
   paddingBytes: number;
   /** Whether an atomic rename was performed. */
   atomic: boolean;

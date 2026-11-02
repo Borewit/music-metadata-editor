@@ -1,52 +1,47 @@
+import { fileTypeFromTokenizer } from 'file-type';
+import { EndOfStreamError, type ITokenizer } from 'strtok3';
 import type { ByteSource } from './source.js';
 
-export type ContainerFormat = 'flac' | 'id3' | 'mp3' | 'unknown';
+export type ContainerFormat = 'flac' | 'id3' | 'mp3' | 'wav' | 'unknown';
 
-/**
- * Detect the container format from the first bytes of the input.
- *
- * FLAC files with a leading ID3v2 tag are reported as `flac`; the FLAC parser
- * preserves the prefix.
- */
+/** Detect audio containers using file-type without loading the entire file. */
 export async function detectFormat(source: ByteSource): Promise<ContainerFormat> {
-  if (source.size < 3) {
-    return 'unknown';
+  if (source.size >= 12) {
+    const header = await source.read(0, 12);
+    if (String.fromCharCode(...header.subarray(0, 4)) === 'RIFF' &&
+        String.fromCharCode(...header.subarray(8, 12)) === 'WAVE') return 'wav';
   }
-
-  const header = await source.read(0, Math.min(12, source.size));
-
-  if (header[0] === 0x66 && header[1] === 0x4c && header[2] === 0x61 && header[3] === 0x43) {
-    return 'flac';
+  let extension: string | undefined;
+  try {
+    const tokenizer = source.tokenizer;
+    tokenizer.setPosition(0);
+    // file-type closes its input. Borrow the methods while retaining ownership
+    // of the source so the writer can continue reading the same open file.
+    const borrowed: ITokenizer = {
+      fileInfo: tokenizer.fileInfo,
+      get position() { return tokenizer.position; },
+      readBuffer: tokenizer.readBuffer.bind(tokenizer),
+      peekBuffer: tokenizer.peekBuffer.bind(tokenizer),
+      readToken: tokenizer.readToken.bind(tokenizer),
+      peekToken: tokenizer.peekToken.bind(tokenizer),
+      readNumber: tokenizer.readNumber.bind(tokenizer),
+      peekNumber: tokenizer.peekNumber.bind(tokenizer),
+      ignore: tokenizer.ignore.bind(tokenizer),
+      supportsRandomAccess: tokenizer.supportsRandomAccess.bind(tokenizer),
+      abort: tokenizer.abort.bind(tokenizer),
+      close: async () => {}
+    };
+    extension = (await fileTypeFromTokenizer(borrowed))?.ext;
+  } catch (error) {
+    if (!(error instanceof EndOfStreamError)) throw error;
   }
+  if (extension === 'flac' || extension === 'mp3' || extension === 'wav') return extension;
 
-  if (header[0] === 0x49 && header[1] === 0x44 && header[2] === 0x33) {
-    if (header.length < 10) {
-      return 'id3';
-    }
-    const size = readSyncSafeUInt32(header, 6);
-    const hasFooter = header[3]! >= 4 && (header[5]! & 0x10) !== 0;
-    const payloadOffset = 10 + size + (hasFooter ? 10 : 0);
-    if (payloadOffset + 4 <= source.size) {
-      const payload = await source.read(payloadOffset, 4);
-      if (payload[0] === 0x66 && payload[1] === 0x4c && payload[2] === 0x61 && payload[3] === 0x43) {
-        return 'flac';
-      }
-    }
-    return 'id3';
+  // Route incomplete or unsupported ID3 input to the writer for validation.
+  // file-type can return undefined for truncated tags or an ID3v2.4 footer.
+  if (source.size >= 3) {
+    const signature = await source.read(0, 3);
+    if (signature[0] === 73 && signature[1] === 68 && signature[2] === 51) return 'id3';
   }
-
-  if (header[0] === 0xff && (header[1]! & 0xe0) === 0xe0) {
-    return 'mp3';
-  }
-
   return 'unknown';
-}
-
-function readSyncSafeUInt32(data: Uint8Array, offset: number): number {
-  return (
-    ((data[offset]! & 0x7f) << 21) |
-    ((data[offset + 1]! & 0x7f) << 14) |
-    ((data[offset + 2]! & 0x7f) << 7) |
-    (data[offset + 3]! & 0x7f)
-  );
 }

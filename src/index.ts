@@ -1,10 +1,13 @@
-import type { IAudioMetadata } from 'music-metadata';
+import { normalizeCommonPatch } from './mapping/common.js';
+import { buildWavUpdate } from './wav/wav.js';
+import { parseFile, parseBuffer, type IAudioMetadata } from 'music-metadata';
 
 import { concatBytes } from './core/bytes.js';
 import { detectFormat, type ContainerFormat } from './core/detect.js';
 import { InvalidPatchError, UnsupportedFeatureError, UnsupportedFormatError } from './core/errors.js';
 import { openSource } from './core/source.js';
 import type { ReadResult, TagPatch, WriteOptions, WriteResult } from './core/types.js';
+import { buildId3Update } from './id3v2/id3v2.js';
 import { buildFlacUpdate } from './flac/flac.js';
 import { writeChunks } from './core/writer.js';
 
@@ -37,33 +40,41 @@ export type {
  * the audio payload is copied in chunks. By default the result is written to a
  * temporary file and atomically renamed into place.
  */
-export async function updateFile(
-  filePath: string,
-  patch: TagPatch,
-  options: WriteOptions = {}
-): Promise<WriteResult> {
+export async function updateFile(filePath: string, patch: TagPatch, options: WriteOptions = {}): Promise<WriteResult> {
   assertPatch(patch);
+  patch = normalizeCommonPatch(patch);
   const source = await openSource(filePath);
   try {
     const format = await detectFormat(source);
     assertSupported(format);
+    if (format === 'flac' && options.replaceId3) {
+      throw new UnsupportedFeatureError('replaceId3 is only supported for MP3 and WAV');
+    }
 
-    const update = await buildFlacUpdate(source, patch, options);
+    if (format === 'wav') {
+      const update = await buildWavUpdate(source, patch, options);
+      const result = await writeChunks(filePath, update.chunks, {
+        atomic: options.atomic ?? true,
+        backup: options.backup ?? false,
+        dryRun: options.dryRun ?? false,
+        beforeReplace: () => source.close()
+      });
+      return { format: 'wav', ...result, paddingBytes: update.paddingBytes };
+    }
+    const update = await (format === 'flac' ? buildFlacUpdate : buildId3Update)(source, patch, options);
     const result = await writeChunks(
       filePath,
-      [
-        update.metadata,
-        { source, offset: update.audioOffset, length: update.audioLength }
-      ],
+      [update.metadata, { source, offset: update.audioOffset, length: update.audioLength }],
       {
         atomic: options.atomic ?? true,
         backup: options.backup ?? false,
-        dryRun: options.dryRun ?? false
+        dryRun: options.dryRun ?? false,
+        beforeReplace: () => source.close()
       }
     );
 
     return {
-      format: 'flac',
+      format: format === 'flac' ? 'flac' : 'mp3',
       bytesWritten: result.bytesWritten,
       paddingBytes: update.paddingBytes,
       atomic: result.atomic
@@ -78,18 +89,29 @@ export async function updateFile(
  *
  * Returns a new buffer; the input is not modified.
  */
-export async function updateBuffer(
-  data: Uint8Array,
-  patch: TagPatch,
-  options: WriteOptions = {}
-): Promise<Uint8Array> {
+export async function updateBuffer(data: Uint8Array, patch: TagPatch, options: WriteOptions = {}): Promise<Uint8Array> {
   assertPatch(patch);
+  patch = normalizeCommonPatch(patch);
   const source = await openSource(data);
   try {
     const format = await detectFormat(source);
     assertSupported(format);
+    if (format === 'flac' && options.replaceId3) {
+      throw new UnsupportedFeatureError('replaceId3 is only supported for MP3 and WAV');
+    }
 
-    const update = await buildFlacUpdate(source, patch, options);
+    if (format === 'wav') {
+      const update = await buildWavUpdate(source, patch, options);
+      const output = new Uint8Array(update.chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+      let offset = 0;
+      for (const chunk of update.chunks) {
+        const bytes = chunk instanceof Uint8Array ? chunk : await chunk.source.read(chunk.offset, chunk.length);
+        output.set(bytes, offset);
+        offset += bytes.length;
+      }
+      return output;
+    }
+    const update = await (format === 'flac' ? buildFlacUpdate : buildId3Update)(source, patch, options);
     const audio = await source.read(update.audioOffset, update.audioLength);
     return concatBytes(update.metadata, audio);
   } finally {
@@ -100,7 +122,7 @@ export async function updateBuffer(
 /**
  * Read tags from a file path or an in-memory buffer.
  *
- * Reading is delegated to the optional `music-metadata` package, so the editor
+ * Reading is delegated to the `music-metadata` dependency, so the editor
  * does not maintain a second tag decoder. The returned `common`, `native`, and
  * `pictures` values are the `music-metadata` structures.
  */
@@ -115,18 +137,8 @@ export async function readTags(input: string | Uint8Array): Promise<ReadResult> 
 }
 
 async function readWithMusicMetadata(input: string | Uint8Array): Promise<IAudioMetadata> {
-  let musicMetadata: typeof import('music-metadata');
-  try {
-    musicMetadata = await import('music-metadata');
-  } catch (error) {
-    throw new UnsupportedFeatureError(
-      'readTags requires the optional music-metadata package; install it with `npm install music-metadata`',
-      { cause: error }
-    );
-  }
-
   if (typeof input === 'string') {
-    return musicMetadata.parseFile(input);
+    return parseFile(input);
   }
 
   // Auto-detection stops at a leading ID3v2 tag, so a FLAC buffer with such a
@@ -135,9 +147,7 @@ async function readWithMusicMetadata(input: string | Uint8Array): Promise<IAudio
   const source = await openSource(input);
   try {
     const format = await detectFormat(source);
-    return format === 'flac'
-      ? musicMetadata.parseBuffer(input, { mimeType: 'audio/flac' })
-      : musicMetadata.parseBuffer(input);
+    return format === 'flac' ? parseBuffer(input, { mimeType: 'audio/flac' }) : parseBuffer(input);
   } finally {
     await source.close();
   }
@@ -163,18 +173,8 @@ function assertPatch(patch: TagPatch): void {
   }
 }
 
-function assertSupported(format: ContainerFormat): asserts format is 'flac' {
-  switch (format) {
-    case 'flac':
-      return;
-    case 'id3':
-    case 'mp3':
-      throw new UnsupportedFormatError(
-        'MP3/ID3v2.4 support is not implemented yet; this release supports FLAC only'
-      );
-    case 'unknown':
-      throw new UnsupportedFormatError(
-        'Unsupported audio format; this release supports FLAC only'
-      );
+function assertSupported(format: ContainerFormat): asserts format is 'flac' | 'id3' | 'mp3' | 'wav' {
+  if (format === 'unknown') {
+    throw new UnsupportedFormatError('Unsupported audio format; supported formats are FLAC, WAV and MP3/ID3v2.4');
   }
 }

@@ -17,6 +17,8 @@ export interface AtomicWriteOptions {
   atomic: boolean;
   backup: boolean;
   dryRun: boolean;
+  /** Release caller-owned input handles after staging, before atomic replacement. */
+  beforeReplace?: () => Promise<void>;
 }
 
 export interface AtomicWriteResult {
@@ -40,6 +42,24 @@ export async function writeChunks(
 
   if (options.dryRun) {
     return { bytesWritten: totalBytes, atomic: options.atomic };
+  }
+
+  // Resolve links before replacing a directory entry.
+  filePath = await fs.realpath(filePath);
+  if (!options.atomic) {
+    // Stage before opening the destination: source ranges may reference it.
+    const parts: Uint8Array[] = [];
+    for (const chunk of chunks) {
+      parts.push(chunk instanceof Uint8Array ? chunk : await chunk.source.read(chunk.offset, chunk.length));
+    }
+    if (options.backup) await backupFile(filePath);
+    const target = await fs.open(filePath, 'r+');
+    try {
+      for (const part of parts) await writeAll(target, part);
+      await target.truncate(totalBytes);
+      await target.sync();
+    } finally { await target.close(); }
+    return { bytesWritten: totalBytes, atomic: false };
   }
 
   const directory = path.dirname(filePath);
@@ -87,6 +107,8 @@ export async function writeChunks(
     }
 
     if (options.atomic) {
+      // Windows cannot replace the destination while its input handle is open.
+      await options.beforeReplace?.();
       await fs.rename(temporaryPath, filePath);
     } else {
       await fs.copyFile(temporaryPath, filePath);

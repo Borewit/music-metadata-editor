@@ -1,27 +1,20 @@
-import { UINT8, UINT24_BE } from 'token-types';
+import { TokenWriter } from 'strtok3';
+import { BlockHeader, BlockType as BLOCK_TYPE } from 'music-metadata/tokens/flac';
 
-import { TokenWriter, readUInt24BE } from '../core/bytes.js';
 import { InvalidFileError, InvalidPatchError, UnsupportedFormatError } from '../core/errors.js';
 import { validatePictures } from '../core/patch.js';
 import type { ByteSource } from '../core/source.js';
 import type { Picture, TagPatch, WriteOptions } from '../core/types.js';
 import { applyVorbisPatch } from '../mapping/vorbis.js';
+import { parseVorbisComment, serializeVorbisComment } from '../vorbis/comment.js';
 import { serializePicture } from './picture.js';
-import { parseVorbisComment, serializeVorbisComment } from './vorbis.js';
 
 export const FLAC_MARKER = 'fLaC';
+const FLAC_MARKER_BYTES = Uint8Array.of(0x66, 0x4c, 0x61, 0x43);
 export const DEFAULT_VENDOR = 'music-metadata-editor';
 export const DEFAULT_PADDING = 8192;
 
-export const BLOCK_TYPE = {
-  STREAMINFO: 0,
-  PADDING: 1,
-  APPLICATION: 2,
-  SEEKTABLE: 3,
-  VORBIS_COMMENT: 4,
-  CUESHEET: 5,
-  PICTURE: 6
-} as const;
+export { BLOCK_TYPE };
 
 const MAX_BLOCKS = 10_000;
 const STREAMINFO_LENGTH = 34;
@@ -95,9 +88,8 @@ export async function parseFlac(source: ByteSource): Promise<ParsedFlac> {
       throw new InvalidFileError('Truncated FLAC metadata block header');
     }
     const header = await source.read(offset, 4);
-    last = (header[0]! & 0x80) !== 0;
-    const type = header[0]! & 0x7f;
-    const length = readUInt24BE(header, 1);
+    const { lastBlock, type, length } = BlockHeader.get(header, 0);
+    last = lastBlock;
     offset += 4;
     if (offset + length > source.size) {
       throw new InvalidFileError(
@@ -139,6 +131,7 @@ export async function buildFlacUpdate(
   options: WriteOptions = {}
 ): Promise<FlacUpdate> {
   const parsed = await parseFlac(source);
+  const id3Prefix = options.stripFlacId3 ? new Uint8Array(0) : parsed.id3Prefix;
   const paddingTarget = validatePadding(options.padding);
 
   let blocks = parsed.blocks.map(block => ({ type: block.type, data: block.data }));
@@ -168,9 +161,9 @@ export async function buildFlacUpdate(
     nonPadding.push({ type: BLOCK_TYPE.PADDING, data: padding });
   }
 
-  const metadata = serializeFlac(parsed.id3Prefix, nonPadding);
+  const metadata = serializeFlac(id3Prefix, nonPadding);
   return {
-    id3Prefix: parsed.id3Prefix,
+    id3Prefix,
     blocks: nonPadding,
     metadata,
     audioOffset: parsed.audioOffset,
@@ -231,8 +224,8 @@ function serializeFlac(id3Prefix: Uint8Array, blocks: readonly FlacBlock[]): Uin
   }
 
   const writer = new TokenWriter(size);
-  writer.writeBytes(id3Prefix);
-  writer.writeAscii(FLAC_MARKER);
+  writer.writeBuffer(id3Prefix);
+  writer.writeBuffer(FLAC_MARKER_BYTES);
 
   for (let index = 0; index < blocks.length; index++) {
     const block = blocks[index]!;
@@ -240,9 +233,8 @@ function serializeFlac(id3Prefix: Uint8Array, blocks: readonly FlacBlock[]): Uin
     if (block.data.length > 0xffffff) {
       throw new InvalidFileError(`FLAC metadata block is too large: ${block.data.length} bytes`);
     }
-    writer.writeToken(UINT8, (isLast ? 0x80 : 0) | (block.type & 0x7f));
-    writer.writeToken(UINT24_BE, block.data.length);
-    writer.writeBytes(block.data);
+    writer.writeToken(BlockHeader, { lastBlock: isLast, type: block.type as BLOCK_TYPE, length: block.data.length });
+    writer.writeBuffer(block.data);
   }
 
   return writer.toUint8Array();

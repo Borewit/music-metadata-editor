@@ -1,23 +1,20 @@
+import { COMMON_FIELDS, EXTRA_COMMON_FIELDS, commonText, structuredText } from './common.js';
 import { InvalidPatchError } from '../core/errors.js';
-import {
-  normalizeComments,
-  normalizeNumberPair,
-  numberValue,
-  textValues
-} from '../core/patch.js';
-import type { TagPatch } from '../core/types.js';
-
-export interface VorbisComment {
-  key: string;
-  value: string;
-}
-
-export interface VorbisFields {
-  vendor: string;
-  comments: VorbisComment[];
-}
+import { normalizeComments, normalizeNumberPair, numberValue, textValues } from '../core/patch.js';
+import type { TagPatch, TextPatch } from '../core/types.js';
+import type { VorbisComment, VorbisFields } from '../vorbis/comment.js';
 
 type TextPatchKey =
+  | 'notes'
+  | 'barcode'
+  | 'releasecountry'
+  | 'asin'
+  | 'albumartistsort'
+  | 'artistsort'
+  | 'script'
+  | 'releasestatus'
+  | 'releasetype'
+  | 'acoustid_id'
   | 'title'
   | 'artist'
   | 'artists'
@@ -70,6 +67,17 @@ interface TextFieldMapping {
 }
 
 const TEXT_FIELDS: readonly TextFieldMapping[] = [
+  { patch: 'notes', field: 'NOTES', multiple: true },
+  { patch: 'barcode', field: 'BARCODE', multiple: false },
+  { patch: 'releasecountry', field: 'RELEASECOUNTRY', multiple: false },
+  { patch: 'asin', field: 'ASIN', multiple: false },
+  { patch: 'albumartistsort', field: 'ALBUMARTISTSORT', multiple: false },
+  { patch: 'artistsort', field: 'ARTISTSORT', multiple: false },
+  { patch: 'script', field: 'SCRIPT', multiple: false },
+  { patch: 'releasestatus', field: 'RELEASESTATUS', multiple: false },
+  { patch: 'releasetype', field: 'RELEASETYPE', multiple: true },
+  { patch: 'acoustid_id', field: 'ACOUSTID_ID', multiple: false },
+
   { patch: 'title', field: 'TITLE', multiple: false },
   { patch: 'artist', field: 'ARTIST', multiple: false },
   { patch: 'artists', field: 'ARTIST', multiple: true },
@@ -97,9 +105,9 @@ const TEXT_FIELDS: readonly TextFieldMapping[] = [
   { patch: 'media', field: 'MEDIA', multiple: false },
   { patch: 'mood', field: 'MOOD', multiple: false },
   { patch: 'grouping', field: 'GROUPING', multiple: false },
-  { patch: 'subtitle', field: 'SUBTITLE', multiple: false },
+  { patch: 'subtitle', field: 'SUBTITLE', multiple: true },
   { patch: 'website', field: 'WEBSITE', multiple: false },
-  { patch: 'lyrics', field: 'LYRICS', multiple: false },
+  { patch: 'lyrics', field: 'LYRICS', multiple: true },
   { patch: 'musicbrainz_recordingid', field: 'MUSICBRAINZ_TRACKID', multiple: false },
   { patch: 'musicbrainz_trackid', field: 'MUSICBRAINZ_RELEASETRACKID', multiple: false },
   { patch: 'musicbrainz_albumid', field: 'MUSICBRAINZ_ALBUMID', multiple: false },
@@ -121,13 +129,45 @@ const TEXT_FIELDS: readonly TextFieldMapping[] = [
  */
 export function applyVorbisPatch(fields: VorbisFields, patch: TagPatch): VorbisFields {
   const comments = fields.comments.map(comment => ({ ...comment }));
+  for (const key of EXTRA_COMMON_FIELDS) {
+    if (patch[key] !== undefined) setField(comments, COMMON_FIELDS[key].vorbis, commonText(patch[key], key));
+  }
 
+  for (const [key, value] of Object.entries(structuredText(patch)))
+    setField(comments, COMMON_FIELDS[key as keyof typeof COMMON_FIELDS].vorbis, value === null ? null : [value]);
+  if (patch['performer:instrument'] !== undefined)
+    setField(comments, 'PERFORMER:INSTRUMENT', commonText(patch['performer:instrument'], 'performer:instrument'));
+  if (patch.movementIndex !== undefined) {
+    const pair = normalizeNumberPair(patch.movementIndex, 'movementIndex');
+    if (pair === null) {
+      removeField(comments, 'MOVEMENTNUMBER');
+      removeField(comments, 'MOVEMENTTOTAL');
+    } else {
+      if (pair?.no !== undefined) setField(comments, 'MOVEMENTNUMBER', pair.no === null ? null : [String(pair.no)]);
+      if (pair?.of !== undefined) setField(comments, 'MOVEMENTTOTAL', pair.of === null ? null : [String(pair.of)]);
+    }
+  }
   for (const mapping of TEXT_FIELDS) {
     const value = patch[mapping.patch];
     if (value === undefined) {
       continue;
     }
-    const values = textValues(value);
+    const values =
+      mapping.patch === 'lyrics' && Array.isArray(value)
+        ? value.map(entry => {
+            if (typeof entry === 'string') return entry;
+            if ('syncText' in entry && entry.syncText?.length)
+              return entry.syncText
+                .map(line => {
+                  if (entry.timeStampFormat !== 2 || line.timestamp === undefined)
+                    throw new InvalidPatchError('Vorbis synchronized lyrics require millisecond timestamps');
+                  const ms = line.timestamp;
+                  return `[${String(Math.floor(ms / 60000)).padStart(2, '0')}:${((ms % 60000) / 1000).toFixed(3).padStart(6, '0')}]${line.text}`;
+                })
+                .join('\n');
+            return entry.text ?? '';
+          })
+        : textValues(value as TextPatch);
     if (values === undefined) {
       continue;
     }
@@ -138,7 +178,25 @@ export function applyVorbisPatch(fields: VorbisFields, patch: TagPatch): VorbisF
     if (!mapping.multiple && values.length > 1) {
       throw new InvalidPatchError(`${String(mapping.patch)} accepts a single value`);
     }
-    setField(comments, mapping.field, values);
+    // Keep an explicit display artist separate from the individual artist list.
+    const field = mapping.patch === 'artists' && patch.artist !== undefined ? 'ARTISTS' : mapping.field;
+    setField(comments, field, values);
+  }
+
+  if (patch.rating !== undefined) {
+    for (let index = comments.length - 1; index >= 0; index--) {
+      const key = comments[index]!.key.toUpperCase();
+      if (key === 'RATING' || key.startsWith('RATING:')) comments.splice(index, 1);
+    }
+    for (const rating of patch.rating ?? []) {
+      if (rating.rating === undefined || !Number.isFinite(rating.rating) || rating.rating < 0 || rating.rating > 1) {
+        throw new InvalidPatchError('rating must be a number between 0 and 1');
+      }
+      if (rating.source?.includes(':')) throw new InvalidPatchError('rating source must not contain a colon');
+      const key = rating.source ? `RATING:${rating.source}` : 'RATING';
+      validateFieldName(key);
+      setField(comments, key, [String(rating.source ? rating.rating : rating.rating * 100)]);
+    }
   }
 
   const commentsPatch = normalizeComments(patch.comment);
@@ -149,7 +207,7 @@ export function applyVorbisPatch(fields: VorbisFields, patch: TagPatch): VorbisF
       setField(
         comments,
         'COMMENT',
-        commentsPatch.map(comment => comment.text)
+        commentsPatch.map(comment => comment.text ?? '')
       );
     }
   }

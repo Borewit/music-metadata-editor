@@ -11,13 +11,14 @@ import { InvalidFileError } from './errors.js';
  * `music-metadata` ecosystem.
  */
 export interface ByteSource {
+  readonly tokenizer: IRandomAccessTokenizer;
   readonly size: number;
   read(offset: number, length: number): Promise<Uint8Array>;
   close(): Promise<void>;
 }
 
 class TokenizerSource implements ByteSource {
-  public constructor(private readonly tokenizer: IRandomAccessTokenizer) {}
+  public constructor(public readonly tokenizer: IRandomAccessTokenizer) {}
 
   public get size(): number {
     return this.tokenizer.fileInfo.size;

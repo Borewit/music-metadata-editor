@@ -1,3 +1,13 @@
+import { AttachedPictureType } from 'music-metadata/tokens/id3v2';
+import {
+  BlockHeader,
+  BlockType,
+  PICTURE_TYPES,
+  decodePicture,
+  pictureTypeToNumber
+} from 'music-metadata/tokens/flac';
+import { encodePicture } from '../src/flac/write.js';
+
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -236,7 +246,7 @@ describe('FLAC writing', () => {
     await expect(updateBuffer(Uint8Array.from([1, 2, 3, 4, 5]), { title: 'x' })).rejects.toThrow();
   });
 
-  it('rejects MP3 input for now', async () => {
+  it('rejects an ID3 tag without audio', async () => {
     const mp3 = Uint8Array.from([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0, 0, 0, 0]);
     await expect(updateBuffer(mp3, { title: 'x' })).rejects.toBeInstanceOf(UnsupportedFormatError);
   });
@@ -301,5 +311,142 @@ describe('FLAC file updates', () => {
     const backup = await readFile(`${filePath}.bak`);
     expect(backup).toEqual(Buffer.from(original));
     await stat(`${filePath}.bak`);
+  });
+});
+
+describe('FLAC block headers', () => {
+  it('round-trips the last-block flag, type and length', () => {
+    const buffer = new Uint8Array(4);
+    const next = BlockHeader.put(buffer, 0, {
+      lastBlock: true,
+      type: BlockType.PICTURE,
+      length: 0x010203
+    });
+
+    expect(next).toBe(4);
+    expect(Array.from(buffer)).toEqual([0x86, 0x01, 0x02, 0x03]);
+    expect(BlockHeader.get(buffer, 0)).toEqual({
+      lastBlock: true,
+      type: BlockType.PICTURE,
+      length: 0x010203
+    });
+  });
+
+  it('decodes a non-final header', () => {
+    const header = BlockHeader.get(Uint8Array.from([0x04, 0x00, 0x00, 0x22]), 0);
+    expect(header).toEqual({
+      lastBlock: false,
+      type: BlockType.VORBIS_COMMENT,
+      length: 0x22
+    });
+  });
+
+  it('rejects lengths beyond the 24-bit field', () => {
+    expect(() =>
+      BlockHeader.put(new Uint8Array(4), 0, {
+        lastBlock: false,
+        type: BlockType.PADDING,
+        length: 0x1000000
+      })
+    ).toThrow(RangeError);
+  });
+
+  it('rejects a truncated header', () => {
+    expect(() => BlockHeader.get(new Uint8Array(3), 0)).toThrow(RangeError);
+  });
+});
+
+describe('FLAC PICTURE codec', () => {
+  const data = Uint8Array.from([0x89, 0x50, 0x4e, 0x47]);
+
+  it('round-trips numeric picture types and dimensions', () => {
+    const encoded = encodePicture({
+      typeId: 3,
+      format: 'image/png',
+      description: 'front',
+      width: 32,
+      height: 16,
+      colourDepth: 24,
+      colours: 0,
+      data
+    });
+
+    const picture = decodePicture(encoded);
+    expect(picture).toEqual({
+      typeId: 3,
+      type: 'Cover (front)',
+      format: 'image/png',
+      description: 'front',
+      width: 32,
+      height: 16,
+      colour_depth: 24,
+      indexed_color: 0,
+      colourDepth: 24,
+      colours: 0,
+      data
+    });
+  });
+
+  it('preserves the legacy colour fields on encode', () => {
+    const encoded = encodePicture({
+      type: 'Cover (back)',
+      format: 'image/jpeg',
+      description: '',
+      colour_depth: 8,
+      indexed_color: 16,
+      data
+    });
+
+    const picture = decodePicture(encoded);
+    expect(picture.typeId).toBe(4);
+    expect(picture.type).toBe('Cover (back)');
+    expect(picture.colour_depth).toBe(8);
+    expect(picture.indexed_color).toBe(16);
+  });
+
+  it('normalizes common MIME aliases', () => {
+    expect(decodePicture(encodePicture({ format: 'jpg', data })).format).toBe('image/jpeg');
+    expect(decodePicture(encodePicture({ format: 'JPEG', data })).format).toBe('image/jpeg');
+    expect(decodePicture(encodePicture({ format: 'png', data })).format).toBe('image/png');
+    expect(decodePicture(encodePicture({ format: 'image/gif', data })).format).toBe('image/gif');
+  });
+
+  it('maps unknown picture types to Other when encoding from a name', () => {
+    const encoded = encodePicture({ type: 'Unknown', format: 'image/png', data });
+    expect(decodePicture(encoded).typeId).toBe(0);
+    expect(pictureTypeToNumber(undefined)).toBe(0);
+    expect(pictureTypeToNumber('Cover (front)')).toBe(3);
+  });
+
+  it('rejects truncated field lengths', () => {
+    const encoded = encodePicture({ format: 'image/png', description: 'description', data });
+    encoded[7] = 0xff;
+    encoded[8] = 0xff;
+    encoded[9] = 0xff;
+    encoded[10] = 0xff;
+    expect(() => decodePicture(encoded)).toThrow(RangeError);
+  });
+
+  it('rejects trailing bytes when exact data is required', () => {
+    const encoded = encodePicture({ format: 'image/png', data });
+    const withTrailing = new Uint8Array(encoded.length + 1);
+    withTrailing.set(encoded);
+    expect(() => decodePicture(withTrailing, 0, { requireExactData: true })).toThrow(RangeError);
+    expect(decodePicture(withTrailing).data).toEqual(data);
+  });
+});
+
+describe('shared picture type table', () => {
+  it('matches the ID3v2 attached-picture table', () => {
+    expect(PICTURE_TYPES).toEqual(Object.values(AttachedPictureType));
+  });
+});
+
+describe('picture ownership', () => {
+  it('copies artwork from a Node Buffer', () => {
+    const input = Buffer.from(encodePicture({ format: 'png', data: Uint8Array.of(1, 2, 3) }));
+    const picture = decodePicture(input);
+    input.fill(0);
+    expect(Array.from(picture.data)).toEqual([1, 2, 3]);
   });
 });

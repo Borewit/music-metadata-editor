@@ -1,8 +1,9 @@
-import { TokenWriter } from '../../src/core/bytes.js';
+import { TokenWriter } from 'strtok3';
+import { UINT8, UINT16_BE, UINT24_BE, UINT32_BE } from 'token-types';
+
 import type { Picture } from '../../src/core/types.js';
 import { serializePicture } from '../../src/flac/picture.js';
-import { serializeVorbisComment } from '../../src/flac/vorbis.js';
-import type { VorbisComment } from '../../src/mapping/vorbis.js';
+import { serializeVorbisComment, type VorbisComment } from '../../src/vorbis/comment.js';
 
 export interface TestBlock {
   type: number;
@@ -22,18 +23,18 @@ export interface MakeFlacOptions {
 
 export function makeStreamInfo(): Uint8Array {
   const writer = new TokenWriter(34);
-  writer.writeUInt16BE(4096);
-  writer.writeUInt16BE(4096);
-  writer.writeUInt24BE(0);
-  writer.writeUInt24BE(0);
+  writer.writeToken(UINT16_BE, 4096);
+  writer.writeToken(UINT16_BE, 4096);
+  writer.writeToken(UINT24_BE, 0);
+  writer.writeToken(UINT24_BE, 0);
 
   const sampleRate = 44100;
   const channelsMinus1 = 1;
   const bitsPerSampleMinus1 = 15;
   const totalSamples = 44100;
   const high = (sampleRate << 12) | (channelsMinus1 << 9) | (bitsPerSampleMinus1 << 4);
-  writer.writeUInt32BE(high >>> 0);
-  writer.writeUInt32BE(totalSamples >>> 0);
+  writer.writeToken(UINT32_BE, high >>> 0);
+  writer.writeToken(UINT32_BE, totalSamples >>> 0);
   writer.writeZeros(16);
   return writer.toUint8Array();
 }
@@ -66,16 +67,16 @@ export function makeFlac(options: MakeFlacOptions = {}): Uint8Array {
 
   const writer = new TokenWriter();
   if (options.id3Prefix !== undefined) {
-    writer.writeBytes(options.id3Prefix);
+    writer.writeBuffer(options.id3Prefix);
   }
-  writer.writeAscii('fLaC');
+  writer.writeBuffer(Uint8Array.of(0x66, 0x4c, 0x61, 0x43));
   for (let index = 0; index < blocks.length; index++) {
     const block = blocks[index]!;
-    writer.writeUInt8((index === blocks.length - 1 ? 0x80 : 0) | block.type);
-    writer.writeUInt24BE(block.data.length);
-    writer.writeBytes(block.data);
+    writer.writeToken(UINT8, (index === blocks.length - 1 ? 0x80 : 0) | block.type);
+    writer.writeToken(UINT24_BE, block.data.length);
+    writer.writeBuffer(block.data);
   }
-  writer.writeBytes(options.audio ?? makeAudio());
+  writer.writeBuffer(options.audio ?? makeAudio());
   return writer.toUint8Array();
 }
 
