@@ -1,146 +1,307 @@
-[![CI](https://github.com/Borewit/music-metadata-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/Borewit/music-metadata-editor/actions/workflows/ci.yml)
-[![NPM version](https://img.shields.io/npm/v/music-metadata-editor.svg)](https://npmjs.org/package/music-metadata-editor)
-[![npm downloads](https://img.shields.io/npm/dm/music-metadata-editor.svg)](https://npmjs.org/package/music-metadata-editor)
-[![CodeQL](https://github.com/Borewit/music-metadata-editor/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/Borewit/music-metadata-editor/actions/workflows/codeql-analysis.yml)
-
 # music-metadata-editor
 
-Write metadata to common audio files from Node.js, designed to sit alongside
-[`music-metadata`](https://github.com/Borewit/music-metadata).
+[![NPM version](https://img.shields.io/npm/v/music-metadata-editor.svg)](https://npmjs.org/package/music-metadata-editor)
+[![npm downloads](https://img.shields.io/npm/dm/music-metadata-editor.svg)](https://npmjs.org/package/music-metadata-editor)
+[![CI](https://github.com/Borewit/music-metadata-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/Borewit/music-metadata-editor/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Borewit/music-metadata-editor/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/Borewit/music-metadata-editor/actions/workflows/codeql-analysis.yml)
 
-> **Status: FLAC, MP3 / ID3v2.4, WAV / ID3v2.4 and MP4 / M4A writing implemented.**
-> Existing ID3v2.2/2.3 tags and ID3 tags with header flags (including extended
-> headers, tag-level unsynchronisation and footers) are rejected before writing.
+**Edit audio tags and cover art from Node.js without re-encoding the audio.**
 
-## Features
+Fix an album title, organize a music library, embed artwork, or update MusicBrainz
+and ReplayGain metadata with the same API across FLAC, MP3, WAV and MP4 files.
 
-- Patch-based API: change only the fields you pass.
-- `undefined` keeps a value, `null` deletes it, strings/arrays set it.
-- Preserves unknown FLAC blocks, untouched ID3v2.4 frames, audio and trailing side tags.
-- Preserves an existing ID3v2 prefix on FLAC files.
-- Reads and writes native FLAC `PICTURE` blocks.
-- Edits iTunes-style MP4 metadata while preserving media samples and updating chunk offsets.
-- Keeps or adds FLAC padding so repeated edits do not grow the file forever.
-- Atomic writes by default (temporary file + `fsync` + rename).
-- Buffer and file APIs.
-- Shares random-access tokenization with `strtok3`.
-- Serializes numeric and fixed-size fields with `token-types` tokens, and text
-  with `@borewit/text-codec`.
-- `readTags` delegates to the required `music-metadata` dependency.
+- **Change only what you need.** Unspecified tags and audio data are preserved.
+- **Use familiar tag names.** Write `title`, `artists`, `album`, `track` and more across formats.
+- **Add or remove artwork.** Work with embedded pictures alongside text and numeric tags.
+- **Choose files or buffers.** Update a file on disk or get a new buffer in memory.
+- **Write safely by default.** File updates use atomic replacement, with optional backups and dry runs.
 
+[Quick start](#quick-start) · [Supported formats](#supported-formats) · [Supported tags](#supported-tags) ·
+[Write options](#write-options) · [Format notes](#format-notes)
 
-## Install
+## How it works
 
-```bash
+Pass a **patch** containing the tags you want to change. The editor detects the
+file format, merges the patch with existing metadata, and rebuilds the metadata
+while copying the encoded audio unchanged. Omit a field to keep it; use `null` to
+delete it.
+
+`updateFile` writes the result to a temporary file and atomically replaces the
+original by default. `updateBuffer` returns a new `Uint8Array` and leaves its input
+untouched. `readTags` returns common tags, native tags and embedded pictures.
+
+## Supported formats
+
+These formats support both file and buffer updates:
+
+| Audio container | Extensions | Tags written |
+| --- | --- | --- |
+| **FLAC** | `.flac` | Vorbis Comments and native FLAC pictures |
+| **MP3** | `.mp3` | ID3v2.4; also creates tags on untagged MPEG audio |
+| **WAV** | `.wav` | ID3v2.4 in a RIFF/WAVE `id3 ` chunk |
+| **MP4 / M4A / M4B** | `.mp4`, `.m4a`, `.m4b` | iTunes-style metadata, including AAC and ALAC audio |
+
+Existing ID3v2.2/2.3 tags require explicit replacement. MP4 writing supports
+non-fragmented, self-contained files with iTunes metadata. See
+[format notes](#format-notes) for compatibility details.
+
+## Quick start
+
+Requires **Node.js 22 or later**. The package is **ESM-only**.
+
+```sh
 npm install music-metadata-editor
 ```
 
-`music-metadata` is installed as a regular dependency and supplies metadata
-reading, normalized types and structural tokens.
+### Edit a file
 
-Requires Node.js 22 or later. The package is ESM-only.
+```js
+import { readTags, updateFile } from 'music-metadata-editor';
 
-## Usage
-
-```ts
-import { readTags, updateFile, updateBuffer } from 'music-metadata-editor';
-
-// Read tags through music-metadata. Install it alongside the editor.
-const metadata = await readTags('track.flac');
-console.log(metadata.common.title);
-console.log(metadata.native.vorbis?.find(tag => tag.id === 'TITLE')?.value);
-console.log(metadata.pictures);
-
-// Patch a file. Only the supplied fields change.
 await updateFile('track.flac', {
   title: 'New title',
   artists: ['Artist A', 'Artist B'],
   album: 'New album',
   genre: ['Jazz'],
-  track: { no: 4, of: 12 },
-  picture: null // remove embedded pictures
+  track: { no: 4, of: 12 }
 });
 
-// Work entirely in memory.
-const output = await updateBuffer(input, { title: 'New title' });
+const metadata = await readTags('track.flac');
+console.log(metadata.common.title); // New title
+console.log(metadata.common.track); // { no: 4, of: 12 }
 ```
 
-### Patch semantics
+Use the same calls with a supported `.mp3`, `.wav`, `.m4a` or `.mp4` file.
 
-| Value | Meaning |
-| --- | --- |
-| property absent / `undefined` | keep the existing value |
-| `null` | remove the value |
-| `string` | set a single value |
-| `string[]` | set repeated values (where supported) |
-| `track: { no: 4 }` | set the track number, leave the total untouched |
-| `track: null` | remove the track number and total |
-| `native: { MY_FIELD: 'x' }` | set a format-native Vorbis Comment field |
-| `native: { MY_FIELD: null }` | remove a format-native field |
+### Add or remove cover art
 
-`artist` and `artists` both map to the Vorbis `ARTIST` field. If both are
-provided, `artists` wins because it is applied last. The same applies to
-`albumartist` / `albumartists`.
+```js
+import { readFile } from 'node:fs/promises';
+import { updateFile } from 'music-metadata-editor';
 
-### Write options
-
-```ts
-await updateFile('track.flac', patch, {
-  padding: 8192, // target padding in bytes; 0 removes padding
-  atomic: true,  // default
-  backup: false, // write a .bak copy before replacing the file
-  dryRun: false  // build the output but do not write
+await updateFile('track.m4a', {
+  picture: [{ format: 'image/jpeg', data: await readFile('cover.jpg') }]
 });
+
+// Remove all embedded pictures.
+await updateFile('track.m4a', { picture: null });
+```
+
+MP4 artwork accepts JPEG and PNG. Passing a `picture` array replaces the existing
+pictures; to keep them, omit the field.
+
+### Work with a buffer
+
+```js
+import { readFile, writeFile } from 'node:fs/promises';
+import { updateBuffer } from 'music-metadata-editor';
+
+const input = await readFile('track.mp3');
+const output = await updateBuffer(input, { title: 'New title' });
+await writeFile('updated.mp3', output);
 ```
 
 ## Supported tags
 
-The common tag names follow `music-metadata`'s `ICommonTagsResult`, including
-title, artist(s), album artist(s), album, date, original date, release date,
-genre, comment, composer, lyricist, writer, conductor, remixer, arranger,
-engineer, producer, mixer, technician, label, catalogue number, ISRC, BPM,
-copyright, media, mood, grouping, subtitle, website, lyrics, track/disc
-numbers, pictures, MusicBrainz IDs, and ReplayGain fields.
+Common tag names work across formats. FLAC, MP3 and WAV provide a write
+representation for every common field in `TagPatch`; the table below highlights
+the main groups. MP4 supports the fields listed in its column and rejects other
+common fields with an explicit error.
 
-Anything else can be written through the `native` escape hatch. Native keys are
-case-insensitive when writing. `readTags` returns `music-metadata`'s native
-structure, keyed by tag type (`vorbis`, `ID3v2.4`, …).
+| Group | FLAC, MP3 and WAV examples | MP4 fields |
+| --- | --- | --- |
+| Titles and artists | `title`, `artist`, `artists`, `albumartist`, `albumartists`, `album` | Same |
+| Dates | `date`, `year`, `originaldate`, `originalyear`, `releasedate` | Same |
+| Track and disc | `track`, `disk`, `totaltracks`, `totaldiscs` | Same |
+| Classification | `genre`, `bpm`, `mood`, `grouping`, `media`, `key`, `compilation`, `gapless` | Same |
+| Credits | `composer`, `lyricist`, `writer`, `conductor`, `remixer`, `arranger`, `engineer`, `producer`, `mixer`, `technician`, `performer` | All listed except `writer`, `arranger`, `technician` |
+| Release details | `label`, `catalognumber`, `barcode`, `isrc`, `asin`, `releasestatus`, `releasetype`, `releasecountry` | Same |
+| Text and artwork | `comment`, `lyrics`, `picture`, `copyright`, `description`, `longDescription`, `work`, `subtitle`, `discsubtitle`, `language`, `script`, `encodedby` | Same; lyrics/comments retain text only, artwork is JPEG/PNG |
+| Sorting | `titlesort`, `artistsort`, `albumartistsort`, `albumsort`, `composersort` | Same |
+| MusicBrainz | Recording, release-track, album, artist, album-artist, release-group, work and disc IDs | Same; use the `musicbrainz_` fields listed below |
+| ReplayGain | Track/album gain and peak | Same; use the `replaygain_` fields listed below |
+| Further common fields | Ratings, websites, movements, podcast information and other `TagPatch` fields | Use native items where applicable; no common-field mapping |
+
+MusicBrainz fields: `musicbrainz_recordingid`, `musicbrainz_trackid`,
+`musicbrainz_albumid`, `musicbrainz_artistid`, `musicbrainz_albumartistid`,
+`musicbrainz_releasegroupid`, `musicbrainz_workid`, `musicbrainz_discid`.
+Recording and release-track IDs are separate fields.
+
+ReplayGain fields: `replaygain_track_gain`, `replaygain_track_peak`,
+`replaygain_album_gain`, `replaygain_album_peak`. Gains accept text such as
+`'-6.20 dB'`; peaks accept text such as `'0.988'`. Reader ratio objects are also
+accepted: gain uses `dB`, peak uses `ratio`.
+
+Writing a common field does not guarantee that every reader exposes it as a
+common tag. Some fields use descriptive native text tags; inspect `metadata.native`
+when a reader has no corresponding common mapping. Format differences also affect
+lyrics, picture attributes and ratings; see [format notes](#format-notes).
+
+### Patch semantics
+
+| Patch value | Effect |
+| --- | --- |
+| Absent or `undefined` | Keep the existing value |
+| `null` | Delete the value |
+| A string, number or boolean | Set the value, according to the field's type |
+| A string array | Set repeated values where supported |
+| `track: { no: 4 }` | Change the track number and keep its total |
+| `track: null` | Remove the track number and total |
+| `picture: [...]` | Replace the embedded pictures |
+
+Use `disk` for disc numbers. In FLAC, `artists` takes precedence over `artist`
+when both are supplied; the same applies to `albumartists` and `albumartist`.
+MP4 uses the same precedence. MP3/WAV store display artists and individual artists
+in separate fields. A full `date` takes precedence over the `year` alias.
+
+### Native tags
+
+Use `native` for custom fields or direct access to a format's tags. Native values
+apply after common fields, so they can override a common mapping.
+
+| Format | Example |
+| --- | --- |
+| FLAC / Vorbis Comments | `native: { MY_FIELD: 'Value' }` |
+| MP3 or WAV / ID3v2.4 | `native: { 'TXXX:MY_FIELD': 'Value' }` |
+| MP4 / iTunes | `native: { '----:com.apple.iTunes:MY_FIELD': 'Value' }` |
+
+Set a native value to `null` to delete it. Vorbis names and MP4 freeform keys are
+matched without case sensitivity; MP4 four-character item names are case-sensitive.
+
+ID3 native fields accept frame IDs, structured values for APIC/COMM/USLT/UFID/POPM/TIPL/TMCL,
+and raw `Uint8Array` frame bodies. MP4 accepts four-character item names or
+`----:mean:name` keys. MP4 strings write UTF-8 data; a `Uint8Array` supplies the
+complete item body, including matching `mean` and `name` children for freeform tags.
+
+## Write options
+
+```js
+import { updateFile } from 'music-metadata-editor';
+
+const result = await updateFile('track.flac', { title: 'New title' }, {
+  backup: true, // keep the original as track.flac.bak
+  dryRun: false // true builds the update without writing
+});
+
+console.log(result.format, result.bytesWritten, result.paddingBytes, result.atomic);
+```
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `atomic` | `true` | Stage output and rename it over the original; file API only |
+| `backup` | `false` | Copy the original to `<path>.bak` before replacement; file API only |
+| `dryRun` | `false` | Build the update and return the expected byte count without writing; file API only |
+| `padding` | `8192` | Control metadata padding for FLAC, MP3 and WAV; `0` removes padding. MP4 rejects this option |
+| `replaceId3` | `false` | Discard existing ID3 metadata and write a fresh ID3v2.4 tag; MP3 and WAV only |
+| `stripFlacId3` | `false` | Remove a nonstandard leading ID3 tag from FLAC; otherwise preserve it |
+
+Atomic updates require write access to the destination directory and space for a
+second copy. With `atomic: false`, MP3, FLAC and WAV stage output in memory and
+overwrite the original. MP4 stages on disk before copying over the original, so
+it still requires directory write access and temporary disk space.
+
+Failures before atomic replacement leave the destination unchanged. A failed
+non-atomic overwrite can leave partial output. Backups are not transactional:
+a failed backup can leave a partial `.bak` or overwrite an earlier backup.
+Atomic replacement does not guarantee recovery from power loss, preserve every
+filesystem attribute, or serialize simultaneous updates.
+
+## Format notes
+
+### FLAC
+
+Writes Vorbis Comments and native `PICTURE` blocks, preserves unknown metadata
+blocks and encoded audio, and keeps or adds padding. A leading ID3 prefix is
+preserved unless `stripFlacId3` is enabled.
+
+### MP3 / ID3v2.4
+
+Creates tags on untagged MPEG audio and patches existing ID3v2.4 tags. Untouched
+frames retain their bodies and flags. ID3v1, APEv2 and Lyrics3 tails are preserved;
+editing those trailing tags is not implemented.
+
+ID3v2.2/2.3 tags, tag-level flags, extended headers, unsynchronisation and footers
+are rejected during normal updates. Editing a flagged frame whose identity
+requires decoding is also rejected. To discard existing ID3 metadata explicitly:
+
+```js
+import { updateFile } from 'music-metadata-editor';
+
+await updateFile('track.mp3', { title: 'New title' }, { replaceId3: true });
+```
+
+This removes the existing leading ID3 tag and trailing ID3v1 tag, then writes
+only the supplied patch as ID3v2.4. Other trailing metadata is preserved.
+Unspecified ID3 fields are lost; this option does not convert legacy fields.
+
+### WAV / ID3v2.4
+
+Supports standard little-endian RIFF/WAVE and stores ID3v2.4 in an `id3 ` chunk.
+Existing `ID3 ` chunks are also recognized. Legacy ID3 chunks require
+`replaceId3: true`, which discards their contents and writes only the patch.
+
+Audio, other RIFF chunks and bytes after the declared RIFF container are preserved.
+Existing LIST/INFO and broadcast metadata are preserved without synchronization
+with ID3, so applications may display different values. RF64, RIFX, Wave64,
+malformed chunk boundaries and multiple ID3 chunks are not supported.
+
+### MP4 / M4A / M4B
+
+Supports iTunes-style metadata in non-fragmented, self-contained files. It
+preserves untouched items and media samples and updates chunk offsets when
+metadata grows or shrinks. Fragmented files, external media references,
+non-iTunes layouts and multiple or track-level metadata containers are rejected.
+MP4 padding is not implemented; omit `padding`.
+
+Artwork accepts JPEG/PNG. Comments and lyrics store text without ID3-specific
+language, descriptors or timing information. Unsupported common fields fail
+explicitly rather than being silently omitted.
+
+### Moving metadata between formats
+
+ID3 synchronized lyrics retain language, descriptor, content type and timestamp
+format. Vorbis timed lyrics use LRC with millisecond precision; MPEG-frame
+timestamps are rejected because conversion requires an audio timebase.
+Vorbis comments and lyrics cannot retain every ID3-specific attribute. ID3 ratings
+are quantized to POPM's byte scale, and MP4 artwork cannot retain all picture attributes.
 
 ## Architecture
 
-```
+The editor owns format detection, metadata patches, container traversal, padding
+and file replacement. It rebuilds metadata while preserving audio data; default
+atomic file writes copy source ranges in bounded chunks.
+
+Dependencies are installed automatically with the package:
+
+| Dependency | Role |
+| --- | --- |
+| [`music-metadata`](https://github.com/Borewit/music-metadata) | Reads tags and supplies common types and shared structural tokens |
+| `file-type` | Detects the audio container |
+| `strtok3` | Provides random-access tokenization and `TokenWriter` serialization |
+| `token-types` | Reads and writes numeric and fixed-size binary fields |
+| `@borewit/text-codec` | Encodes text |
+
+`readTags` delegates decoding to `music-metadata` and returns its `common`,
+`native` and picture structures. `TagPatch` derives common fields from its
+`ICommonTagsResult` type and adds null deletions, partial number pairs and text
+conveniences. Shared FLAC, ID3 and Vorbis primitives come from the
+`music-metadata/tokens` subpaths; picture encoding and Vorbis serialization live
+in this editor. No separate reader installation or sibling checkout is needed.
+
+```text
 src/
-  core/       errors, types, byte readers, random-access source, format
-              detection, patch helpers, atomic file writer
-  vorbis/     shared Vorbis Comment codec adapter
-  flac/       metadata blocks, shared PICTURE codec exports, rewrite
-  id3v2/      ID3v2.4 frame codecs and MP3 metadata rewrite
-  mp4/        iTunes item lists, movie rebuilding and chunk-offset relocation
-  mapping/    common tags to Vorbis Comment fields and ID3v2.4 frames
+  core/       detection, byte sources, patches, types, errors and file writes
+  flac/       FLAC metadata and pictures
+  id3v2/      ID3v2.4 frames and MP3 rewriting
+  wav/        RIFF/WAVE chunks and embedded ID3 updates
+  mp4/        iTunes metadata and chunk-offset relocation
+  vorbis/     Vorbis Comment serialization
+  mapping/    common fields to native tags
 ```
-
-Shared FLAC headers, picture decoding, ID3 primitives and Vorbis Comment decoding
-live in the supported `music-metadata/tokens` subpaths. Picture encoding and
-Vorbis serialization live in this editor and use `strtok3.TokenWriter`.
-Container traversal, tag mapping, padding and file writes remain in the editor.
-
-Reading is delegated to `music-metadata`; the editor keeps only the structural
-parsing needed to preserve unknown blocks and audio payloads.
-
-The FLAC writer rebuilds only the metadata block chain and streams the audio
-payload from the original file. It never loads the whole audio file into memory
-for the file API.
 
 ## Development
 
-`token-types` is installed from npm at version 6.2.0 or later.
-`strtok3` is installed from npm at version 10.7.0 or later.
-Serialization uses its `TokenWriter.writeBuffer()` method
-for raw bytes; write methods return the number of bytes written.
-The reader and shared structural tokens are installed from npm through
-`music-metadata` 12.3.4 or later. No sibling checkout is needed:
-
-```bash
+```sh
 npm ci
 npm run typecheck
 npm test
@@ -149,136 +310,4 @@ npm run build
 
 ## License
 
-MIT. `mutagen` was used as a behavioural reference only; no GPL code is
-included.
-
-
-## MP3 / ID3v2.4
-
-The same `updateFile` and `updateBuffer` APIs create an ID3v2.4 tag on
-untagged MPEG audio or update an existing v2.4 tag. New text uses UTF-8.
-Common mapping includes pictures, comments, lyrics, ratings, contributor
-roles and MusicBrainz identifiers. Display artist and individual artists
-use separate frames. Track/disc patches preserve omitted components.
-
-For native writes use frame IDs, with `TXXX:description` for user text.
-Strings and string arrays write text frames; structured reader values write
-APIC, COMM, USLT, UFID, POPM, TIPL and TMCL frames. A `Uint8Array` supplies
-a raw frame body. Native fields apply after common fields.
-
-Untouched frames retain their bodies and flags byte-for-byte. Editing a
-flagged frame that requires decoding its identity is rejected. Tag-level
-flags, extended headers, footers and older ID3 versions are currently
-unsupported. Existing ID3v1, APEv2 and Lyrics3 tails are copied unchanged;
-editing those side tags is not implemented. Padding controls tag growth;
-file updates still rebuild and atomically replace the file.
-
-### Replacing legacy MP3 tags
-
-To discard old ID3 metadata and write a fresh ID3v2.4 tag:
-
-```js
-await updateFile('track.mp3', { title: 'New title', artist: 'Artist' }, { replaceId3: true });
-```
-
-`replaceId3` removes the leading ID3v2.2, ID3v2.3 or ID3v2.4 tag and a trailing
-ID3v1 tag. All unspecified ID3 fields are discarded; this does not convert old
-fields. An empty patch writes an empty ID3v2.4 tag. MPEG audio and other trailing
-metadata such as APE tags are preserved. The option is rejected for FLAC.
-Normal updates preserve existing fields and still require ID3v2.4 input.
-
-## WAV / ID3v2.4
-
-`updateFile` and `updateBuffer` accept RIFF/WAVE files and write an `id3 ` chunk
-containing ID3v2.4. The same common and native ID3 patch fields work as for MP3.
-
-```ts
-await updateFile('track.wav', { title: 'New title', picture: null });
-```
-
-Existing ID3v2.4 frames not touched by the patch are preserved. Existing
-ID3v2.2/2.3 chunks require `{ replaceId3: true }`, which discards their contents
-and writes only the supplied patch. Both `id3 ` and `ID3 ` chunk names are
-recognized; output uses `id3 `.
-
-Audio and all other RIFF chunks (including their padding) are copied unchanged.
-RIFF sizes and ID3 chunk padding are rebuilt. Bytes after the declared RIFF
-container are preserved outside it. File updates stream unchanged chunks and
-support the usual atomic, backup and dry-run options.
-
-This writer supports standard little-endian RIFF/WAVE, not RF64, RIFX or Wave64.
-Malformed chunk boundaries and multiple ID3 chunks are rejected before writing.
-Existing LIST/INFO or broadcast metadata is preserved without synchronization
-with ID3, so applications that prefer those fields may display different values.
-
-## MP4 / M4A
-
-Edit tags and artwork without re-encoding the audio:
-
-```js
-await updateFile('track.m4a', {
-  title: 'New title',
-  artists: ['First artist', 'Second artist'],
-  track: { no: 3, of: 12 },
-  picture: [{ format: 'image/jpeg', data: coverBytes }]
-});
-```
-
-Supports iTunes-style metadata in non-fragmented MP4/M4A files, including AAC
-and ALAC. Untouched tags and media samples are preserved, and chunk offsets
-are updated automatically when metadata grows or shrinks.
-
-Common fields include titles, artists, albums, dates, genre, lyrics, comments,
-track/disc numbers, artwork, MusicBrainz IDs and ReplayGain. Use `native` for
-custom text, for example `{ '----:com.apple.iTunes:MY_FIELD': 'Value' }`.
-Unsupported common fields return an error. A native `Uint8Array` supplies the
-complete item body; for `----:mean:name` keys this includes `mean` and `name`
-children matching the key, followed by the `data` children.
-
-MP4 file updates copy media in bounded chunks even with `atomic: false`. That
-mode stages the complete output in a temporary file before copying it over the
-destination. It requires write access to the destination directory and temporary
-space for a second copy of the file. The final copy is not crash-atomic.
-
-Artwork accepts JPEG or PNG. Comments and lyrics retain text, without
-ID3-specific language or timing information. Fragmented files, external media
-references and non-iTunes metadata layouts are rejected. MP4 padding is not
-yet supported; omit the `padding` option.
-
-### Common-tag compatibility
-
-`TagPatch` derives its complete field set from music-metadata's
-`ICommonTagsResult`, while retaining explicit null deletions, partial number
-pairs and the editor's string conveniences. Reader common results can be passed
-directly without a type cast. ReplayGain `IRatio` objects use decibels for gain
-and linear ratios for peak; year, totals and gain-ratio aliases normalize to the
-corresponding date, number-pair and ReplayGain fields.
-
-For MP3, FLAC and WAV, every common property has a write representation. MP4
-supports the subset listed above. Existing standard mappings are used where available; additional properties use descriptive ID3 TXXX or
-Vorbis text fields. Writing a field does not imply that every reader maps its
-native representation back to a common property. In particular, music-metadata
-has fewer common read mappings for ID3 and Vorbis than its cross-format common
-interface. Native metadata remains available for inspecting those fields.
-
-Synchronized ID3 lyrics use SYLT and retain their language, descriptor, content
-type and timestamp format. Vorbis timed lyrics use LRC with millisecond
-precision; MPEG-frame timestamps are rejected because their conversion requires
-an audio timebase. Vorbis comments and lyrics do not carry all ID3-specific
-language/descriptor information. Ratings in ID3 are quantized to POPM's byte
-scale. These format constraints apply when transferring common metadata.
-
-### File-write failure guarantees
-
-Atomic file updates stage and flush the complete output before renaming it over
-its destination. Failures before replacement leave the destination bytes
-unchanged. Input and staging handles are released and temporary-file cleanup is
-attempted on failure; filesystem errors can prevent cleanup. A requested backup
-must finish before replacement proceeds. A failed backup copy can leave a partial
-`.bak` file or overwrite a previous backup; backups are not transactional.
-
-A successful rename commits the update. This does not guarantee recovery from
-power loss (the parent directory is not fsynced), preserve every filesystem
-attribute, or serialize simultaneous updates. With `atomic: false`, writes go
-directly to the destination after staging (on disk for MP4, in memory for other
-formats); failures during the final overwrite can leave partial output. Use the default atomic mode for destination preservation.
+MIT. Mutagen was used as a behavioral reference; no GPL code is included.
