@@ -8,7 +8,7 @@
 Write metadata to common audio files from Node.js, designed to sit alongside
 [`music-metadata`](https://github.com/Borewit/music-metadata).
 
-> **Status: FLAC, MP3 / ID3v2.4 and WAV / ID3v2.4 writing implemented.**
+> **Status: FLAC, MP3 / ID3v2.4, WAV / ID3v2.4 and MP4 / M4A writing implemented.**
 > Existing ID3v2.2/2.3 tags and ID3 tags with header flags (including extended
 > headers, tag-level unsynchronisation and footers) are rejected before writing.
 
@@ -19,6 +19,7 @@ Write metadata to common audio files from Node.js, designed to sit alongside
 - Preserves unknown FLAC blocks, untouched ID3v2.4 frames, audio and trailing side tags.
 - Preserves an existing ID3v2 prefix on FLAC files.
 - Reads and writes native FLAC `PICTURE` blocks.
+- Edits iTunes-style MP4 metadata while preserving media samples and updating chunk offsets.
 - Keeps or adds FLAC padding so repeated edits do not grow the file forever.
 - Atomic writes by default (temporary file + `fsync` + rename).
 - Buffer and file APIs.
@@ -114,6 +115,7 @@ src/
   vorbis/     shared Vorbis Comment codec adapter
   flac/       metadata blocks, shared PICTURE codec exports, rewrite
   id3v2/      ID3v2.4 frame codecs and MP3 metadata rewrite
+  mp4/        iTunes item lists, movie rebuilding and chunk-offset relocation
   mapping/    common tags to Vorbis Comment fields and ID3v2.4 frames
 ```
 
@@ -209,7 +211,41 @@ Malformed chunk boundaries and multiple ID3 chunks are rejected before writing.
 Existing LIST/INFO or broadcast metadata is preserved without synchronization
 with ID3, so applications that prefer those fields may display different values.
 
-### Common-tag type coverage
+## MP4 / M4A
+
+Edit tags and artwork without re-encoding the audio:
+
+```js
+await updateFile('track.m4a', {
+  title: 'New title',
+  artists: ['First artist', 'Second artist'],
+  track: { no: 3, of: 12 },
+  picture: [{ format: 'image/jpeg', data: coverBytes }]
+});
+```
+
+Supports iTunes-style metadata in non-fragmented MP4/M4A files, including AAC
+and ALAC. Untouched tags and media samples are preserved, and chunk offsets
+are updated automatically when metadata grows or shrinks.
+
+Common fields include titles, artists, albums, dates, genre, lyrics, comments,
+track/disc numbers, artwork, MusicBrainz IDs and ReplayGain. Use `native` for
+custom text, for example `{ '----:com.apple.iTunes:MY_FIELD': 'Value' }`.
+Unsupported common fields return an error. A native `Uint8Array` supplies the
+complete item body; for `----:mean:name` keys this includes `mean` and `name`
+children matching the key, followed by the `data` children.
+
+MP4 file updates copy media in bounded chunks even with `atomic: false`. That
+mode stages the complete output in a temporary file before copying it over the
+destination. It requires write access to the destination directory and temporary
+space for a second copy of the file. The final copy is not crash-atomic.
+
+Artwork accepts JPEG or PNG. Comments and lyrics retain text, without
+ID3-specific language or timing information. Fragmented files, external media
+references and non-iTunes metadata layouts are rejected. MP4 padding is not
+yet supported; omit the `padding` option.
+
+### Common-tag compatibility
 
 `TagPatch` derives its complete field set from music-metadata's
 `ICommonTagsResult`, while retaining explicit null deletions, partial number
@@ -218,8 +254,8 @@ directly without a type cast. ReplayGain `IRatio` objects use decibels for gain
 and linear ratios for peak; year, totals and gain-ratio aliases normalize to the
 corresponding date, number-pair and ReplayGain fields.
 
-Every common property has a write representation. Existing standard mappings
-are used where available; additional properties use descriptive ID3 TXXX or
+For MP3, FLAC and WAV, every common property has a write representation. MP4
+supports the subset listed above. Existing standard mappings are used where available; additional properties use descriptive ID3 TXXX or
 Vorbis text fields. Writing a field does not imply that every reader maps its
 native representation back to a common property. In particular, music-metadata
 has fewer common read mappings for ID3 and Vorbis than its cross-format common
@@ -231,25 +267,6 @@ precision; MPEG-frame timestamps are rejected because their conversion requires
 an audio timebase. Vorbis comments and lyrics do not carry all ID3-specific
 language/descriptor information. Ratings in ID3 are quantized to POPM's byte
 scale. These format constraints apply when transferring common metadata.
-
-Regression fixtures account for every common property at compile time, verify
-an observable native write for each field in MP3, FLAC and WAV, and check full
-payload/structural integrity across growing and shrinking metadata, atomic and
-in-place file writes, and rejected patches.
-
-### Continuous integration
-
-GitHub Actions checks types, builds the package and inspects its publish contents,
-then runs tests on Node.js 22, 24 and 26 on Linux and Windows. A separate job
-produces source-mapped V8 coverage in LCOV and HTML formats, available as the
-`coverage` workflow artifact. Run `npm run test-coverage` locally for the same
-reports. CodeQL scans JavaScript and TypeScript on master, pull requests and a
-weekly schedule. No external coverage or quality service is required.
-
-All runtime dependencies are published npm packages, so CI installs from the
-lockfile without sibling checkouts. The npm badges become available when the
-editor is published.
-
 
 ### File-write failure guarantees
 
@@ -263,5 +280,5 @@ must finish before replacement proceeds. A failed backup copy can leave a partia
 A successful rename commits the update. This does not guarantee recovery from
 power loss (the parent directory is not fsynced), preserve every filesystem
 attribute, or serialize simultaneous updates. With `atomic: false`, writes go
-directly to the destination after memory staging; write, truncate or sync failures
-can leave partial output. Use the default atomic mode for destination preservation.
+directly to the destination after staging (on disk for MP4, in memory for other
+formats); failures during the final overwrite can leave partial output. Use the default atomic mode for destination preservation.

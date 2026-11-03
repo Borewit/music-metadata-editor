@@ -129,7 +129,10 @@ interface CustomTagPatch {
    *
    * For MP3 use frame IDs (TXXX:description for user text), structured native
    * objects for APIC/COMM/USLT/UFID/POPM/TIPL/TMCL, or raw Uint8Array bodies
-   * for binary frames. For FLAC use Vorbis Comment field names, e.g.
+   * for binary frames. For MP4 use four-character item names or ----:mean:name;
+   * strings write UTF-8 data and Uint8Array supplies a complete raw item body
+   * (including matching mean/name children for freeform keys).
+   * For FLAC use Vorbis Comment field names, e.g.
    * `{ "MY_FIELD": "value" }`. Use `null` to remove a field.
    */
   native?: Readonly<
@@ -170,12 +173,14 @@ export interface WriteOptions {
   stripFlacId3?: boolean;
   /**
    * Target amount of padding to keep or add, in bytes. Defaults to 8192.
+   * MP4 does not add padding and rejects this option.
    */
   padding?: PaddingOption;
   /**
    * Write through a temporary file and rename it into place. Defaults to
    * `true`. Only applies to `updateFile`. When false, stage output in memory
-   * and overwrite the existing file in place; this is not crash-atomic.
+   * and overwrite the existing file in place; MP4 instead stages on disk, requiring
+   * directory write access and space for a second copy. Neither overwrite is crash-atomic.
    */
   atomic?: boolean;
   /**
@@ -190,11 +195,11 @@ export interface WriteOptions {
 }
 
 /**
- * Result of a FLAC, MP3 or WAV write operation.
+ * Result of a FLAC, MP3, WAV or MP4 write operation.
  */
 export interface WriteResult {
   /** Container format that was written. */
-  format: 'flac' | 'mp3' | 'wav';
+  format: 'flac' | 'mp3' | 'wav' | 'mp4';
   /** Total number of bytes in the resulting file. */
   bytesWritten: number;
   /** Padding bytes in the resulting metadata section. */

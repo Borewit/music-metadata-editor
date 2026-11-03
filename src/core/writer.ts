@@ -17,7 +17,9 @@ export interface AtomicWriteOptions {
   atomic: boolean;
   backup: boolean;
   dryRun: boolean;
-  /** Release caller-owned input handles after staging, before atomic replacement. */
+  /** Stage source ranges on disk even when replacement is non-atomic. */
+  stageToFile?: boolean;
+  /** Release caller-owned input handles after disk staging, before replacement. */
   beforeReplace?: () => Promise<void>;
 }
 
@@ -46,7 +48,7 @@ export async function writeChunks(
 
   // Resolve links before replacing a directory entry.
   filePath = await fs.realpath(filePath);
-  if (!options.atomic) {
+  if (!options.atomic && !options.stageToFile) {
     // Stage before opening the destination: source ranges may reference it.
     const parts: Uint8Array[] = [];
     for (const chunk of chunks) {
@@ -106,9 +108,9 @@ export async function writeChunks(
       await backupFile(filePath);
     }
 
+    // Release inputs before replacing or overwriting the staged destination.
+    await options.beforeReplace?.();
     if (options.atomic) {
-      // Windows cannot replace the destination while its input handle is open.
-      await options.beforeReplace?.();
       await fs.rename(temporaryPath, filePath);
     } else {
       await fs.copyFile(temporaryPath, filePath);
