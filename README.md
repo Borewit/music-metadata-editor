@@ -249,3 +249,19 @@ weekly schedule. No external coverage or quality service is required.
 All runtime dependencies are published npm packages, so CI installs from the
 lockfile without sibling checkouts. The npm badges become available when the
 editor is published.
+
+
+### File-write failure guarantees
+
+Atomic file updates stage and flush the complete output before renaming it over
+its destination. Failures before replacement leave the destination bytes
+unchanged. Input and staging handles are released and temporary-file cleanup is
+attempted on failure; filesystem errors can prevent cleanup. A requested backup
+must finish before replacement proceeds. A failed backup copy can leave a partial
+`.bak` file or overwrite a previous backup; backups are not transactional.
+
+A successful rename commits the update. This does not guarantee recovery from
+power loss (the parent directory is not fsynced), preserve every filesystem
+attribute, or serialize simultaneous updates. With `atomic: false`, writes go
+directly to the destination after memory staging; write, truncate or sync failures
+can leave partial output. Use the default atomic mode for destination preservation.
