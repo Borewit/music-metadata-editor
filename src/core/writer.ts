@@ -129,17 +129,16 @@ export async function writeChunks(
 }
 
 async function backupFile(filePath: string): Promise<void> {
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
   try {
-    const stat = await fs.stat(filePath);
-    if (!stat.isFile()) {
-      return;
-    }
-    await fs.copyFile(filePath, `${filePath}.bak`);
+    stat = await fs.stat(filePath);
   } catch (error) {
-    if (isErrorCode(error, 'ENOENT')) {
-      return;
-    }
+    if (isErrorCode(error, 'ENOENT')) return;
     throw error;
+  }
+  if (stat.isFile()) {
+    // Once a source exists, every copy failure must prevent replacement.
+    await fs.copyFile(filePath, `${filePath}.bak`);
   }
 }
 
