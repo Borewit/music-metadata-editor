@@ -21,6 +21,7 @@
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
+    "deps:refresh": "npm update && npm dedupe",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
