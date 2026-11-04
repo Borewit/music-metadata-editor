@@ -1,5 +1,6 @@
 import { COMMON_FIELDS, EXTRA_COMMON_FIELDS, commonText, structuredText } from './common.js';
 import { InvalidPatchError } from '../core/errors.js';
+import { lyricsToLrc, normalizeLyrics } from '../core/lyrics.js';
 import { normalizeComments, normalizeNumberPair, numberValue, textValues } from '../core/patch.js';
 import type { TagPatch, TextPatch } from '../core/types.js';
 import type { VorbisComment, VorbisFields } from '../vorbis/comment.js';
@@ -44,7 +45,6 @@ type TextPatchKey =
   | 'grouping'
   | 'subtitle'
   | 'website'
-  | 'lyrics'
   | 'musicbrainz_recordingid'
   | 'musicbrainz_trackid'
   | 'musicbrainz_albumid'
@@ -107,7 +107,6 @@ const TEXT_FIELDS: readonly TextFieldMapping[] = [
   { patch: 'grouping', field: 'GROUPING', multiple: false },
   { patch: 'subtitle', field: 'SUBTITLE', multiple: true },
   { patch: 'website', field: 'WEBSITE', multiple: false },
-  { patch: 'lyrics', field: 'LYRICS', multiple: true },
   { patch: 'musicbrainz_recordingid', field: 'MUSICBRAINZ_TRACKID', multiple: false },
   { patch: 'musicbrainz_trackid', field: 'MUSICBRAINZ_RELEASETRACKID', multiple: false },
   { patch: 'musicbrainz_albumid', field: 'MUSICBRAINZ_ALBUMID', multiple: false },
@@ -147,27 +146,27 @@ export function applyVorbisPatch(fields: VorbisFields, patch: TagPatch): VorbisF
       if (pair?.of !== undefined) setField(comments, 'MOVEMENTTOTAL', pair.of === null ? null : [String(pair.of)]);
     }
   }
+  const lyrics = normalizeLyrics(patch.lyrics);
+  if (lyrics !== undefined) {
+    if (lyrics === null) {
+      removeField(comments, 'LYRICS');
+    } else {
+      // A single LYRICS field cannot hold plain text and synchronized text at
+      // the same time; synchronized lines take precedence.
+      setField(
+        comments,
+        'LYRICS',
+        lyrics.map(entry => (entry.syncText.length > 0 ? lyricsToLrc(entry) : (entry.text ?? '')))
+      );
+    }
+  }
+
   for (const mapping of TEXT_FIELDS) {
     const value = patch[mapping.patch];
     if (value === undefined) {
       continue;
     }
-    const values =
-      mapping.patch === 'lyrics' && Array.isArray(value)
-        ? value.map(entry => {
-            if (typeof entry === 'string') return entry;
-            if ('syncText' in entry && entry.syncText?.length)
-              return entry.syncText
-                .map(line => {
-                  if (entry.timeStampFormat !== 2 || line.timestamp === undefined)
-                    throw new InvalidPatchError('Vorbis synchronized lyrics require millisecond timestamps');
-                  const ms = line.timestamp;
-                  return `[${String(Math.floor(ms / 60000)).padStart(2, '0')}:${((ms % 60000) / 1000).toFixed(3).padStart(6, '0')}]${line.text}`;
-                })
-                .join('\n');
-            return entry.text ?? '';
-          })
-        : textValues(value as TextPatch);
+    const values = textValues(value as TextPatch);
     if (values === undefined) {
       continue;
     }

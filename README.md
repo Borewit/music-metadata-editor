@@ -173,6 +173,42 @@ and raw `Uint8Array` frame bodies. MP4 accepts four-character item names or
 `----:mean:name` keys. MP4 strings write UTF-8 data; a `Uint8Array` supplies the
 complete item body, including matching `mean` and `name` children for freeform tags.
 
+### Lyrics
+
+`lyrics` accepts a string, one lyrics entry, an array of entries, or `null`.
+Entries use the same shape as `music-metadata` results, so `common.lyrics` can
+be passed back directly. A lyrics patch replaces all lyrics in the edited
+format; it does not merge with existing entries.
+
+```js
+await updateFile('track.mp3', {
+  lyrics: [
+    { language: 'zho', descriptor: '原文', text: '第一行\n第二行' },
+    { language: 'eng', descriptor: 'Translation', text: 'First line\nSecond line' }
+  ]
+});
+```
+
+| Input | MP3/WAV | FLAC | MP4 |
+| --- | --- | --- | --- |
+| `'text'` | `USLT`, language `eng` | one `LYRICS` value | one `©lyr` value |
+| Text entry | `USLT` with language and descriptor | text in `LYRICS` | text in `©lyr` |
+| Entry with `syncText` | `SYLT` | LRC in `LYRICS` | joined line text |
+| Entry with `text` and `syncText` | both `USLT` and `SYLT` | LRC; `text` is not duplicated | text; timing is dropped |
+
+Clearing is consistent: `lyrics: ''`, `lyrics: []` and `lyrics: null` remove
+lyrics. An explicit entry with empty text, such as `{ text: '' }`, writes an
+empty value. Text-only input replaces text lyrics and removes `SYLT`;
+synchronized-only input removes `USLT`. Use an entry with both properties when
+both representations should be kept.
+
+FLAC LRC output uses `[mm:ss.mmm]` and requires `timeStampFormat: 2` with a
+millisecond timestamp on every line. Reading that value through `music-metadata`
+and writing it back normalizes timestamp precision, so byte-identical LRC is not
+guaranteed. Use `native: { LYRICS: '...' }` to retain exact LRC text. FLAC does
+not store the language, descriptor, content type or timestamp format; MP4 stores
+text only. Synchronized-only MP4 input keeps the line text but loses timing.
+
 ## Write options
 
 ```js
@@ -261,9 +297,11 @@ explicitly rather than being silently omitted.
 
 ID3 synchronized lyrics retain language, descriptor, content type and timestamp
 format. Vorbis timed lyrics use LRC with millisecond precision; MPEG-frame
-timestamps are rejected because conversion requires an audio timebase.
-Vorbis comments and lyrics cannot retain every ID3-specific attribute. ID3 ratings
-are quantized to POPM's byte scale, and MP4 artwork cannot retain all picture attributes.
+timestamps are rejected because conversion requires an audio timebase. Moving
+lyrics from MP3/WAV to FLAC or MP4 drops ID3-only attributes. Moving synchronized
+lyrics to MP4 keeps the line text but drops timing. See [Lyrics](#lyrics) for the
+accepted shapes and clearing semantics. ID3 ratings are quantized to POPM's byte
+scale, and MP4 artwork cannot retain all picture attributes.
 
 ## Architecture
 

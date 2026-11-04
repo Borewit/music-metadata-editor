@@ -73,6 +73,12 @@ describe('music-metadata read-back', () => {
 const acceptsCommonTags = (common: ICommonTagsResult): TagPatch => common;
 void acceptsCommonTags;
 
+// Lyrics may be supplied as a string, one entry or an array of entries.
+const singleLyricsEntry: TagPatch = { lyrics: { text: 'Words' } };
+const lyricsEntryArray: TagPatch = { lyrics: [{ text: 'Words', language: 'zho' }] };
+void singleLyricsEntry;
+void lyricsEntryArray;
+
 // Adding a common field upstream makes this fixture fail compilation until a value is tested.
 const fullCommon = {
   track: {
@@ -448,6 +454,148 @@ describe('file integrity across full common-tag rewrites', () => {
       });
     }
   }
+});
+
+describe('lyrics patch semantics', () => {
+  const mp3 = () => Uint8Array.from([255, 251, 144, 196, ...new Uint8Array(413)]);
+  const nativeTags = (metadata: Awaited<ReturnType<typeof parseBuffer>>, id: string) =>
+    metadata.native['ID3v2.4']?.filter(tag => tag.id === id) ?? [];
+
+  it('writes plain strings as English USLT and replaces synchronized lyrics', async () => {
+    const synchronized = await updateBuffer(mp3(), {
+      lyrics: {
+        language: 'zho',
+        descriptor: '原文',
+        contentType: 1,
+        timeStampFormat: 2,
+        syncText: [{ text: '第一行', timestamp: 1250 }]
+      }
+    });
+    expect(nativeTags(await parseBuffer(synchronized, { mimeType: 'audio/mpeg' }), 'SYLT')).toHaveLength(1);
+
+    const output = await updateBuffer(synchronized, { lyrics: 'Plain lyrics' });
+    const metadata = await parseBuffer(output, { mimeType: 'audio/mpeg' });
+    expect(nativeTags(metadata, 'USLT')).toEqual([
+      { id: 'USLT', value: { language: 'eng', descriptor: '', text: 'Plain lyrics' } }
+    ]);
+    expect(nativeTags(metadata, 'SYLT')).toHaveLength(0);
+  });
+
+  it('retains explicit languages and descriptors for multiple USLT entries', async () => {
+    const output = await updateBuffer(mp3(), {
+      lyrics: [
+        { language: 'zho', descriptor: '原文', text: '第一行' },
+        { language: 'eng', descriptor: 'Translation', text: 'First line' }
+      ]
+    });
+    const metadata = await parseBuffer(output, { mimeType: 'audio/mpeg' });
+    expect(nativeTags(metadata, 'USLT').map(tag => tag.value)).toEqual([
+      { language: 'zho', descriptor: '原文', text: '第一行' },
+      { language: 'eng', descriptor: 'Translation', text: 'First line' }
+    ]);
+  });
+
+  it('keeps text and synchronized frames for a combined entry and replaces each form independently', async () => {
+    const combined = {
+      language: 'zho',
+      descriptor: '原文',
+      text: '第一行',
+      contentType: 1,
+      timeStampFormat: 2,
+      syncText: [{ text: '第一行', timestamp: 1250 }]
+    } as const;
+    const both = await updateBuffer(mp3(), { lyrics: combined });
+    const bothMetadata = await parseBuffer(both, { mimeType: 'audio/mpeg' });
+    expect(nativeTags(bothMetadata, 'USLT')).toHaveLength(1);
+    expect(nativeTags(bothMetadata, 'SYLT')).toHaveLength(1);
+
+    const textOnly = await updateBuffer(both, { lyrics: 'Text only' });
+    const textMetadata = await parseBuffer(textOnly, { mimeType: 'audio/mpeg' });
+    expect(nativeTags(textMetadata, 'USLT')).toHaveLength(1);
+    expect(nativeTags(textMetadata, 'SYLT')).toHaveLength(0);
+
+    const syncOnly = await updateBuffer(both, {
+      lyrics: {
+        language: 'eng',
+        contentType: 1,
+        timeStampFormat: 2,
+        syncText: [{ text: 'Synchronized only', timestamp: 500 }]
+      }
+    });
+    const syncMetadata = await parseBuffer(syncOnly, { mimeType: 'audio/mpeg' });
+    expect(nativeTags(syncMetadata, 'USLT')).toHaveLength(0);
+    expect(nativeTags(syncMetadata, 'SYLT')).toHaveLength(1);
+  });
+
+  it('defaults optional ID3 synchronized lyrics headers', async () => {
+    const output = await updateBuffer(mp3(), {
+      lyrics: { syncText: [{ text: 'Words', timestamp: 1000 }] }
+    });
+    const metadata = await parseBuffer(output, { mimeType: 'audio/mpeg' });
+    expect(nativeTags(metadata, 'SYLT')[0]?.value).toMatchObject({ contentType: 1, timeStampFormat: 2 });
+  });
+
+  it('treats an empty string, empty array and null as removal', async () => {
+    const populated = await updateBuffer(mp3(), {
+      lyrics: ['eng', 'zho'].map(language => ({ language, text: 'Words', contentType: 1, timeStampFormat: 2, syncText: [{ text: 'Words', timestamp: 0 }] }))
+    });
+    for (const value of ['', [], null] as const) {
+      const output = await updateBuffer(populated, { lyrics: value });
+      const metadata = await parseBuffer(output, { mimeType: 'audio/mpeg' });
+      expect(nativeTags(metadata, 'USLT')).toHaveLength(0);
+      expect(nativeTags(metadata, 'SYLT')).toHaveLength(0);
+    }
+  });
+
+  it('writes repeated FLAC LYRICS values with text only', async () => {
+    const output = await updateBuffer(makeFlac(), {
+      lyrics: [
+        { language: 'zho', descriptor: '原文', text: '第一行' },
+        { language: 'eng', descriptor: 'Translation', text: 'First line' }
+      ]
+    });
+    const metadata = await parseBuffer(output, { mimeType: 'audio/flac' });
+    expect(metadata.native.vorbis?.filter(tag => tag.id === 'LYRICS').map(tag => tag.value)).toEqual([
+      '第一行',
+      'First line'
+    ]);
+    expect(metadata.common.lyrics?.map(lyrics => lyrics.text)).toEqual(['第一行', 'First line']);
+    expect(metadata.common.lyrics?.[0]?.language).toBeUndefined();
+    expect(metadata.common.lyrics?.[0]?.descriptor).toBeUndefined();
+  });
+
+  it('documents FLAC LRC normalization and keeps native LRC byte-identical', async () => {
+    const input = makeFlac({ comments: [{ key: 'LYRICS', value: '[00:01.25]First' }] });
+    const before = await parseBuffer(input, { mimeType: 'audio/flac' });
+    expect(before.native.vorbis).toContainEqual({ id: 'LYRICS', value: '[00:01.25]First' });
+    expect(before.common.lyrics?.[0]?.syncText).toEqual([{ text: 'First', timestamp: 1250 }]);
+
+    const commonRoundTrip = await updateBuffer(input, { lyrics: before.common.lyrics ?? null });
+    expect((await parseBuffer(commonRoundTrip, { mimeType: 'audio/flac' })).native.vorbis).toContainEqual({
+      id: 'LYRICS',
+      value: '[00:01.250]First'
+    });
+
+    const nativeRoundTrip = await updateBuffer(input, { native: { LYRICS: '[00:01.25]First' } });
+    expect((await parseBuffer(nativeRoundTrip, { mimeType: 'audio/flac' })).native.vorbis).toContainEqual({
+      id: 'LYRICS',
+      value: '[00:01.25]First'
+    });
+  });
+
+  it('treats an empty string, empty array and null as FLAC removal while allowing explicit empty text', async () => {
+    const populated = await updateBuffer(makeFlac(), { lyrics: { language: 'zho', text: '第一行' } });
+    for (const value of ['', [], null] as const) {
+      const output = await updateBuffer(populated, { lyrics: value });
+      const metadata = await parseBuffer(output, { mimeType: 'audio/flac' });
+      expect((metadata.native.vorbis ?? []).some(tag => tag.id === 'LYRICS')).toBe(false);
+    }
+    const explicitEmpty = await updateBuffer(makeFlac(), { lyrics: { text: '' } });
+    expect((await parseBuffer(explicitEmpty, { mimeType: 'audio/flac' })).native.vorbis).toContainEqual({
+      id: 'LYRICS',
+      value: ''
+    });
+  });
 });
 
 describe('structured common values', () => {

@@ -63,6 +63,33 @@ describe('WAV ID3v2.4 writing', () => {
     expect(after.native['ID3v2.4']!.some(t => t.id === 'TXXX:PRIVATE')).toBe(true);
   });
 
+  it('applies the shared lyrics shapes and clearing semantics', async () => {
+    const synchronized = {
+      language: 'zho',
+      descriptor: '原文',
+      text: '第一行',
+      contentType: 1,
+      timeStampFormat: 2,
+      syncText: [{ text: '第一行', timestamp: 1250 }]
+    } as const;
+    const both = await updateBuffer(wav(), { lyrics: synchronized });
+    const bothMetadata = await parseBuffer(both, { mimeType: 'audio/wav' });
+    expect(bothMetadata.native['ID3v2.4']?.filter(tag => tag.id === 'USLT')).toHaveLength(1);
+    expect(bothMetadata.native['ID3v2.4']?.filter(tag => tag.id === 'SYLT')).toHaveLength(1);
+
+    const textOnly = await updateBuffer(both, { lyrics: 'Plain' });
+    const textMetadata = await parseBuffer(textOnly, { mimeType: 'audio/wav' });
+    expect(textMetadata.native['ID3v2.4']?.filter(tag => tag.id === 'USLT')).toHaveLength(1);
+    expect(textMetadata.native['ID3v2.4']?.some(tag => tag.id === 'SYLT')).toBe(false);
+    expect(textMetadata.common.lyrics?.[0]?.language).toBe('eng');
+
+    for (const value of ['', [], null] as const) {
+      const cleared = await updateBuffer(both, { lyrics: value });
+      const metadata = await parseBuffer(cleared, { mimeType: 'audio/wav' });
+      expect((metadata.native['ID3v2.4'] ?? []).some(tag => tag.id === 'USLT' || tag.id === 'SYLT')).toBe(false);
+    }
+  });
+
   it('replaces uppercase legacy chunks only with explicit opt-in', async () => {
     const legacy = Buffer.from([73, 68, 51, 3, 0, 0, 0, 0, 0, 0]);
     const input = wav([chunk('ID3 ', legacy)]);

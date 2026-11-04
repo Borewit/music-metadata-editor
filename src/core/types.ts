@@ -47,6 +47,70 @@ export interface Picture extends IPicture {
 export type Comment = NonNullable<ICommonTagsResult['comment']>[number];
 
 /**
+ * One line of synchronized lyrics.
+ */
+export interface SynchronizedLyricsText {
+  /** Line text. */
+  text: string;
+  /** Timestamp: milliseconds for format 2, MPEG frames for ID3 format 1. Required for synchronized output. */
+  timestamp?: number;
+}
+
+/**
+ * One lyrics entry accepted by `TagPatch.lyrics`.
+ *
+ * This is structurally compatible with `music-metadata`'s `IComment` and
+ * `ILyricsTag`, so reader results can be written back without translation.
+ *
+ * Which properties survive depends on the container:
+ *
+ * - MP3/WAV preserve `language`, `descriptor`, `contentType`, `timeStampFormat`
+ *   and `syncText` by writing `USLT` and/or `SYLT` frames.
+ * - FLAC stores `text` in `LYRICS`, or an LRC string when `syncText` is present.
+ *   Language, descriptor, content type and timestamp format are not stored.
+ * - MP4 stores `text` in `©lyr`; when only `syncText` is supplied, the line
+ *   texts are joined with newlines. Timing and ID3 attributes are not stored.
+ */
+export interface LyricsEntry {
+  /** Un-synchronized lyrics text. */
+  text?: string;
+  /** Three-letter ID3 language code, for example `eng` or `zho`. */
+  language?: string;
+  /** Content descriptor stored in `USLT`/`SYLT`. */
+  descriptor?: string;
+  /** ID3 `SYLT` content type from 0 to 8. Defaults to lyrics (`1`) for ID3 output. */
+  contentType?: number;
+  /**
+   * ID3 `SYLT` timestamp format. Defaults to milliseconds (`2`) for ID3 output. FLAC LRC output requires milliseconds (`2`);
+   * MP4 ignores it.
+   */
+  timeStampFormat?: number;
+  /**
+   * Synchronized lines. FLAC writes these as LRC and requires millisecond
+   * timestamps on every line.
+   */
+  syncText?: readonly SynchronizedLyricsText[];
+}
+
+/**
+ * Lyrics value accepted by a patch.
+ *
+ * - A string sets un-synchronized text.
+ * - A single entry or an array of entries sets one or more lyrics records.
+ * - An empty string, an empty array or `null` removes all lyrics.
+ *
+ * A lyrics patch replaces the complete lyrics value for the edited format.
+ * On MP3/WAV, text-only input removes existing `SYLT` frames and synchronized
+ * input removes existing `USLT` frames. Use an entry containing both `text` and
+ * `syncText` to keep both representations.
+ *
+ * Reading FLAC LRC text through `music-metadata` and writing it back normalizes
+ * timestamps (for example `[00:01.25]` becomes `[00:01.250]`). Use the native
+ * `LYRICS` field when byte-identical LRC text is required.
+ */
+export type LyricsPatch = string | LyricsEntry | readonly (string | LyricsEntry)[] | null;
+
+/**
  * Common tag patch.
  *
  * Fields use the same names as `music-metadata`'s `ICommonTagsResult`, so a
@@ -97,7 +161,7 @@ interface CustomTagPatch {
   grouping?: TextPatch;
   subtitle?: TextPatch;
   website?: TextPatch;
-  lyrics?: TextPatch | readonly Comment[] | ICommonTagsResult['lyrics'];
+  lyrics?: LyricsPatch;
   picture?: readonly Picture[] | null;
   movementIndex?: NumberPairPatch | null;
   track?: NumberPairPatch | null;
