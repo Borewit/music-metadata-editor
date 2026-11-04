@@ -300,7 +300,54 @@ describe('ID3 replacement boundaries', () => {
     expect(Buffer.from(result.subarray(audioOffset(result)))).toEqual(source);
   });
 
+  it('preserves Lyrics3 trailers on replacement', async () => {
+    const body = Buffer.from('LYRICSBEGINLYR00012Sample lyric');
+    const lyrics = Buffer.concat([body, Buffer.from(`${String(body.length).padStart(6, '0')}LYRICS200`)]);
+    const source = Buffer.concat([payload, lyrics]);
+    const result = await updateBuffer(source, {}, { replaceId3: true });
+    expect(Buffer.from(result.subarray(audioOffset(result)))).toEqual(source);
+  });
+
   it('rejects replacement on FLAC', async () => {
     await expect(updateBuffer(Buffer.from('fLaC'), {}, { replaceId3: true })).rejects.toThrow('only supported for MP3');
+  });
+});
+
+
+describe('mixed-tag deletion policy', () => {
+  it('preserves competing side tags by default and removes ID3v1 only on replacement', async () => {
+    const tail = Buffer.alloc(128);
+    tail.write('TAG');
+    tail.write('Stale title', 3);
+    const value = Buffer.from('APE title');
+    const item = Buffer.alloc(8);
+    item.writeUInt32LE(value.length);
+    const body = Buffer.concat([item, Buffer.from('Title\0'), value]);
+    const footer = Buffer.alloc(32);
+    footer.write('APETAGEX');
+    footer.writeUInt32LE(2000, 8);
+    footer.writeUInt32LE(body.length + 32, 12);
+    footer.writeUInt32LE(1, 16);
+    const ape = Buffer.concat([body, footer]);
+    const clean = await updateBuffer(payload, {}, { replaceId3: true, padding: 0 });
+    const audio = clean.subarray(audioOffset(clean));
+    const source = await updateBuffer(Buffer.concat([audio, ape, tail]), { title: 'Primary' }, { padding: 0 });
+    expect((await parseBuffer(source, { mimeType: 'audio/mpeg' })).common.title).toBe('APE title');
+    const deleted = await updateBuffer(source, { title: null }, { padding: 0 });
+    expect(Buffer.from(deleted.subarray(audioOffset(deleted))).equals(Buffer.concat([audio, ape, tail]))).toBe(true);
+    const tags = await parseBuffer(deleted, { mimeType: 'audio/mpeg' });
+    expect(tags.common.title).toBe('APE title');
+    expect(tags.native.APEv2).toContainEqual({ id: 'Title', value: 'APE title' });
+    expect(tags.native['ID3v2.4']?.some(tag => tag.id === 'TIT2')).not.toBe(true);
+    const replaced = await updateBuffer(source, { title: null }, { replaceId3: true, padding: 0 });
+    expect(Buffer.from(replaced.subarray(audioOffset(replaced))).equals(Buffer.concat([audio, ape]))).toBe(true);
+    const after = await parseBuffer(replaced, { mimeType: 'audio/mpeg' });
+    expect(after.native.ID3v1).toBeUndefined();
+    expect(after.native['ID3v2.4']?.some(tag => tag.id === 'TIT2')).not.toBe(true);
+    expect(after.common.title).toBe('APE title');
+    const sideOnly = await parseBuffer(Buffer.concat([audio, ape, tail]), { mimeType: 'audio/mpeg' });
+    expect(sideOnly.common.title).toBe('APE title');
+    const id3v1Only = await parseBuffer(Buffer.concat([audio, tail]), { mimeType: 'audio/mpeg' });
+    expect(id3v1Only.common.title).toBe('Stale title');
   });
 });

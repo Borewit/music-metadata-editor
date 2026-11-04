@@ -311,3 +311,20 @@ npm run build
 ## License
 
 MIT. Mutagen was used as a behavioral reference; no GPL code is included.
+
+### Mixed tag families and deletion
+
+A `null` field removes it from the format being edited, not from every tag
+family in the file. Readers merge families, so a preserved side tag can supply
+an older value after deletion. Default writes preserve those side tags byte for
+byte, including MP3 ID3v1, APEv2 and Lyrics3 trailers and leading FLAC ID3.
+
+For FLAC, use `stripFlacId3: true` together with the patch to physically remove
+the leading ID3 tag and prevent its values from resurfacing. For MP3,
+`replaceId3: true` removes leading ID3v2 and trailing ID3v1 and rebuilds ID3v2.4
+from the submitted patch; omitted fields are lost. It preserves APEv2 and
+Lyrics3. ID3v1 has removal support through replacement only; writing/updating
+ID3v1, and updating/removing/writing APEv2 or Lyrics3, are outside the editor's
+scope. Consequently MP3 replacement cannot guarantee global deletion when those
+preserved families contain competing values. Remove those families with another
+tool before using this editor when global deletion is required.
