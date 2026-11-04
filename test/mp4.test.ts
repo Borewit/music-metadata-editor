@@ -122,6 +122,41 @@ describe('MP4 metadata', () => {
     });
   }
 
+  it('stores text lyrics, derives text from synchronized input, and clears consistently', async () => {
+    const input = await fixture('alac');
+    const text = await updateBuffer(input, {
+      lyrics: { language: 'zho', descriptor: '原文', text: '第一行\n第二行' }
+    });
+    const textTags = await readTags(text);
+    expect(textTags.common.lyrics?.map(lyrics => lyrics.text)).toEqual(['第一行\n第二行']);
+    expect(textTags.common.lyrics?.[0]?.language).toBeUndefined();
+    expect(textTags.common.lyrics?.[0]?.descriptor).toBeUndefined();
+
+    const synchronized = await updateBuffer(input, {
+      lyrics: {
+        contentType: 1,
+        timeStampFormat: 2,
+        syncText: [
+          { text: 'First', timestamp: 1250 },
+          { text: 'Second', timestamp: 2000 }
+        ]
+      }
+    });
+    const synchronizedTags = await readTags(synchronized);
+    expect(synchronizedTags.common.lyrics?.map(lyrics => lyrics.text)).toEqual(['First\nSecond']);
+    expect(synchronizedTags.common.lyrics?.[0]?.syncText).toEqual([]);
+
+    const combined = await updateBuffer(input, {
+      lyrics: { text: 'Text wins', contentType: 1, timeStampFormat: 2, syncText: [{ text: 'Ignored', timestamp: 0 }] }
+    });
+    expect((await readTags(combined)).common.lyrics?.map(lyrics => lyrics.text)).toEqual(['Text wins']);
+
+    for (const value of ['', [], null] as const) {
+      const cleared = await updateBuffer(synchronized, { lyrics: value });
+      expect((await readTags(cleared)).common.lyrics).toBeUndefined();
+    }
+  });
+
   it.each(['M4A ', 'M4B ', 'isom', 'iso2', 'iso6', 'mp41', 'mp42', 'zzzz'])(
     'uses the same read and write format for the %s major brand', async brand => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'editor-mp4-brand-'));

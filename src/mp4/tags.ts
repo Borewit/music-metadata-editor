@@ -1,6 +1,7 @@
 import * as Token from 'token-types';
 import { encodeUtf8 } from '../core/bytes.js';
 import { InvalidFileError, InvalidPatchError, UnsupportedFeatureError } from '../core/errors.js';
+import { lyricsText, normalizeLyrics } from '../core/lyrics.js';
 import type { TagPatch } from '../core/types.js';
 import { atom, boxes, copyBox, header, zeros, maxAtoms, type AtomBudget, type Box } from './atoms.js';
 
@@ -20,7 +21,6 @@ const textAtoms: Record<string, string> = {
   year: '©day',
   genre: '©gen',
   composer: '©wrt',
-  lyrics: '©lyr',
   comment: '©cmt',
   copyright: 'cprt',
   description: 'desc',
@@ -142,6 +142,7 @@ export function editItems(
       value === undefined ||
       field === 'native' ||
       field === 'picture' ||
+      field === 'lyrics' ||
       field === 'track' ||
       field === 'disk' ||
       field === 'bpm' ||
@@ -159,6 +160,12 @@ export function editItems(
     // Full dates take precedence over a year alias.
     if (field === 'year' && entries.date !== undefined) continue;
     replace(key, value === null ? null : item(key, value));
+  }
+  if (patch.lyrics !== undefined) {
+    const lyrics = normalizeLyrics(patch.lyrics);
+    // ©lyr is a text item. Synchronized-only input keeps its line text and
+    // loses timing; ID3 attributes are not representable in this item.
+    replace('©lyr', lyrics ? item('©lyr', lyrics.map(lyricsText)) : null);
   }
   for (const field of ['track', 'disk'] as const) {
     const value = patch[field];

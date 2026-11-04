@@ -1,6 +1,7 @@
 import { COMMON_FIELDS, EXTRA_COMMON_FIELDS, commonText, structuredText } from './common.js';
 import { textEncode } from '@borewit/text-codec';
 import { InvalidPatchError, UnsupportedFeatureError } from '../core/errors.js';
+import { normalizeLyrics } from '../core/lyrics.js';
 import { normalizeComments, normalizeNumberPair, textValues, validatePictures } from '../core/patch.js';
 import type { TagPatch } from '../core/types.js';
 import { decodeText, type Frame } from '../id3v2/frames.js';
@@ -127,21 +128,27 @@ export function applyId3Patch(frames: Frame[], patch: TagPatch, replace: (key: s
   }
   if (patch.comment !== undefined) replace('COMM', normalizeComments(patch.comment));
   if (patch.lyrics !== undefined) {
-    const values =
-      patch.lyrics === null
-        ? []
-        : typeof patch.lyrics === 'string'
-          ? [{ text: patch.lyrics }]
-          : patch.lyrics.map(entry => (typeof entry === 'string' ? { text: entry } : entry));
+    const lyrics = normalizeLyrics(patch.lyrics) ?? [];
+    // A single entry may carry both forms. Text-only entries remove SYLT and
+    // synchronized-only entries remove USLT, because a lyrics patch replaces
+    // the complete lyrics value.
     replace(
       'USLT',
-      values
-        .filter(entry => !('syncText' in entry) || !Array.isArray(entry.syncText) || entry.syncText.length === 0)
-        .map(entry => ({ ...entry, text: entry.text ?? '' }))
+      lyrics
+        .filter(entry => entry.text !== undefined || entry.syncText.length === 0)
+        .map(entry => ({ language: entry.language, descriptor: entry.descriptor, text: entry.text ?? '' }))
     );
     replace(
       'SYLT',
-      values.filter(entry => 'syncText' in entry && Array.isArray(entry.syncText) && entry.syncText.length > 0)
+      lyrics
+        .filter(entry => entry.syncText.length > 0)
+        .map(entry => ({
+          language: entry.language,
+          descriptor: entry.descriptor,
+          contentType: entry.contentType ?? 1,
+          timeStampFormat: entry.timeStampFormat ?? 2,
+          syncText: entry.syncText
+        }))
     );
   }
   if (patch.picture !== undefined) replace('APIC', validatePictures(patch.picture));

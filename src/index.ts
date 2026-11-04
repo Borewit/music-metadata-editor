@@ -24,10 +24,13 @@ export { PICTURE_TYPES } from './flac/picture.js';
 export type {
   Comment,
   CommonTags,
+  LyricsEntry,
+  LyricsPatch,
   NumberPair,
   NumberPairPatch,
   Picture,
   ReadResult,
+  SynchronizedLyricsText,
   TagPatch,
   TextPatch,
   WriteOptions,
