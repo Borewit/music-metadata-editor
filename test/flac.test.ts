@@ -1,3 +1,4 @@
+import { encodeFrame } from '../src/id3v2/frames.js';
 import { AttachedPictureType } from 'music-metadata/tokens/id3v2';
 import {
   BlockHeader,
@@ -448,5 +449,29 @@ describe('picture ownership', () => {
     const picture = decodePicture(input);
     input.fill(0);
     expect(Array.from(picture.data)).toEqual([1, 2, 3]);
+  });
+});
+
+
+describe('competing FLAC tag families', () => {
+  it('falls back to preserved ID3 after Vorbis deletion and prevents fallback when stripped', async () => {
+    const frame = encodeFrame({ id: 'TIT2', flags: 0, data: Buffer.from('\x03Stale prefix title') });
+    const prefix = Buffer.concat([makeId3Prefix(frame.length).subarray(0, 10), frame]);
+    const input = makeFlac({ id3Prefix: prefix, comments: [{ key: 'TITLE', value: 'Vorbis title' }] });
+    expect((await readTags(input)).common.title).toBe('Vorbis title');
+    const preserved = await updateBuffer(input, { title: null });
+    expect(Buffer.from(preserved.subarray(0, prefix.length)).equals(prefix)).toBe(true);
+    expect(extractAudio(preserved)).toEqual(extractAudio(input));
+    const fallback = await readTags(preserved);
+    expect(vorbisValues(fallback, 'TITLE')).toEqual([]);
+    expect(fallback.common.title).toBe('Stale prefix title');
+    expect(fallback.native['ID3v2.4']).toContainEqual({ id: 'TIT2', value: 'Stale prefix title' });
+    const stripped = await updateBuffer(input, { title: null }, { stripFlacId3: true });
+    expect(Buffer.from(stripped.subarray(0, 4)).toString()).toBe('fLaC');
+    expect(extractAudio(stripped)).toEqual(extractAudio(input));
+    const deleted = await readTags(stripped);
+    expect(deleted.common.title).toBeUndefined();
+    expect(deleted.native['ID3v2.4']).toBeUndefined();
+    expect(vorbisValues(deleted, 'TITLE')).toEqual([]);
   });
 });
