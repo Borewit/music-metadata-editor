@@ -8,7 +8,7 @@ import { COMMON_FIELDS } from '../src/mapping/common.js';
 import { parseBuffer, type ICommonTagsResult } from 'music-metadata';
 import { describe, expect, it, vi } from 'vitest';
 
-import { readTags, updateBuffer, updateFile, type TagPatch } from '../src/index.js';
+import { InvalidPatchError, readTags, updateBuffer, updateFile, type TagPatch } from '../src/index.js';
 import { makeFlac } from './helpers/flac.js';
 
 describe('music-metadata read-back', () => {
@@ -638,6 +638,22 @@ describe('structured common values', () => {
     await expect(updateBuffer(source, { lyrics: [{ ...lyrics[0]!, timeStampFormat: 1 }] })).rejects.toThrow(
       'millisecond'
     );
+  });
+  it.each([
+    ['\n', 0], ['\r', 0], ['\r\n', 0],
+    ['\n', 1], ['\r', 1], ['\r\n', 1]
+  ] as const)('rejects embedded %j in LRC entry %i without changing the buffer', async (newline, index) => {
+    const source = makeFlac();
+    const original = Uint8Array.from(source);
+    const syncText = [
+      { text: 'First', timestamp: 0 },
+      { text: 'Later', timestamp: 1000 }
+    ];
+    syncText[index]!.text += `${newline}[00:02.000]Injected`;
+    const result = updateBuffer(source, { lyrics: { timeStampFormat: 2, syncText } });
+    await expect(result).rejects.toBeInstanceOf(InvalidPatchError);
+    await expect(result).rejects.toThrow('Vorbis synchronized lyrics line text must not contain CR or LF');
+    expect(source).toEqual(original);
   });
   it('normalizes aliases and retains partial number pairs', async () => {
     const output = await updateBuffer(makeFlac(), {
