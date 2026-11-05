@@ -55,6 +55,9 @@ export function lyricsToLrc(entry: NormalizedLyricsEntry): string {
       if (line.timestamp === undefined) {
         throw new InvalidPatchError('Vorbis synchronized lyrics require millisecond timestamps');
       }
+      if (/[\r\n]/.test(line.text)) {
+        throw new InvalidPatchError('Vorbis synchronized lyrics line text must not contain CR or LF');
+      }
       const ms = line.timestamp;
       const seconds = ((ms % 60000) / 1000).toFixed(3).padStart(6, '0');
       return `[${String(Math.floor(ms / 60000)).padStart(2, '0')}:${seconds}]${line.text}`;

@@ -86,7 +86,7 @@ export interface LyricsEntry {
    */
   timeStampFormat?: number;
   /**
-   * Synchronized lines. FLAC writes these as LRC and requires millisecond
+   * Synchronized lines. FLAC rejects CR/LF in line text, writes these as LRC and requires millisecond
    * timestamps on every line.
    */
   syncText?: readonly SynchronizedLyricsText[];
