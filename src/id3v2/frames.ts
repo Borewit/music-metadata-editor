@@ -98,12 +98,15 @@ export function makeFrames(key: string, value: unknown): Frame[] {
       case 'APIC': {
         if (!object || !(object.data instanceof Uint8Array)) throw new InvalidPatchError('APIC requires picture data');
         const format = normalizePictureMimeType(String(object.format));
+        const description = utf8(object.description ?? '');
+        // Some Windows thumbnail readers reject UTF-8 APIC frames with an empty description.
+        const pictureEncoding = description.length === 0 ? zero : encoding;
         data = join(
-          encoding,
+          pictureEncoding,
           latin(format),
           zero,
           Uint8Array.of(pictureTypeToNumber(object.type as string | undefined)),
-          utf8(object.description ?? ''),
+          description,
           zero,
           object.data
         );

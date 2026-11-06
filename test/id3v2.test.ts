@@ -5,7 +5,7 @@ import { parseFile, parseBuffer } from 'music-metadata';
 import { describe, expect, it } from 'vitest';
 import { updateBuffer, updateFile } from '../src/index.js';
 import type { TagPatch } from '../src/index.js';
-import { syncSafe, encodeFrame } from '../src/id3v2/frames.js';
+import { syncSafe, encodeFrame, makeFrames } from '../src/id3v2/frames.js';
 import { UINT32SYNCSAFE } from 'music-metadata/tokens/id3v2';
 
 const sample = path.join(import.meta.dirname, 'fixtures', "MusicBrainz - Beth Hart - Sinner's Prayer [id3v2.4].V2.mp3");
@@ -349,5 +349,63 @@ describe('mixed-tag deletion policy', () => {
     expect(sideOnly.common.title).toBe('APE title');
     const id3v1Only = await parseBuffer(Buffer.concat([audio, tail]), { mimeType: 'audio/mpeg' });
     expect(id3v1Only.common.title).toBe('Stale title');
+  });
+});
+
+
+describe('APIC empty-description compatibility', () => {
+  it.each([
+    { description: undefined, encoding: 0 },
+    { description: '', encoding: 0 },
+    { description: 'Cover', encoding: 3 },
+    { description: '封面 🎵', encoding: 3 }
+  ])('writes encoding $encoding for description $description', ({ description, encoding }) => {
+    const data = Uint8Array.of(0xff, 0xd8, 0xff, 0xe0);
+    const [frame] = makeFrames('APIC', {
+      format: 'image/jpeg',
+      type: 'Cover (front)',
+      ...(description === undefined ? {} : { description }),
+      data
+    });
+    expect(frame).toEqual({
+      id: 'APIC',
+      flags: 0,
+      data: Uint8Array.from(Buffer.concat([
+        Buffer.from([encoding]),
+        Buffer.from('image/jpeg\0', 'latin1'),
+        Buffer.from([3]),
+        Buffer.from(description ?? '', 'utf8'),
+        Buffer.from([0]),
+        data
+      ]))
+    });
+  });
+
+  it.each([false, 0, 'invalid\0description'])('retains description validation for %j', description => {
+    expect(() => makeFrames('APIC', { format: 'image/jpeg', data: new Uint8Array(), description })).toThrow(
+      'ID3 text must be a string without NUL characters'
+    );
+  });
+
+  it.each(['common', 'native'] as const)('round-trips an empty %s picture description without changing other encodings', async kind => {
+    const { common } = await parseBuffer(input, { mimeType: 'audio/mpeg' });
+    const picture = { ...common.picture![0]!, type: 'Cover (front)', description: '' };
+    const patch = kind === 'common' ? { picture: [picture] } : { native: { APIC: [picture] } };
+    const output = await updateBuffer(payload, {
+      ...patch,
+      title: '同一标题',
+      lyrics: [{ language: 'zho', text: '同一歌词' }]
+    }, { padding: 0 });
+    expect(output[3]).toBe(4);
+    expect(Buffer.from(output.subarray(audioOffset(output)))).toEqual(payload);
+    const encodings: Record<string, number> = {};
+    for (let offset = 10; offset < audioOffset(output); offset += 10 + syncSafe(output, offset + 4)) {
+      encodings[Buffer.from(output.subarray(offset, offset + 4)).toString('latin1')] = output[offset + 10]!;
+    }
+    expect(encodings).toEqual({ TIT2: 3, USLT: 3, APIC: 0 });
+    const after = await parseBuffer(output, { mimeType: 'audio/mpeg' });
+    expect(after.common.title).toBe('同一标题');
+    expect(after.common.lyrics?.[0]?.text).toBe('同一歌词');
+    expect(after.common.picture).toEqual([picture]);
   });
 });
