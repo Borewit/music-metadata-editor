@@ -388,4 +388,4 @@ npm run build
 
 ## License
 
-MIT. Mutagen was used as a behavioral reference; no GPL code is included.
+This project is licensed under the [MIT License](LICENSE.txt). Feel free to use, modify, and distribute as needed.
