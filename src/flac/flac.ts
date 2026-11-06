@@ -1,5 +1,5 @@
 import { TokenWriter } from 'strtok3';
-import { BlockHeader, BlockType as BLOCK_TYPE } from 'music-metadata/tokens/flac';
+import { BlockHeader, BlockType as BLOCK_TYPE, decodePicture } from 'music-metadata/tokens/flac';
 
 import { InvalidFileError, InvalidPatchError, UnsupportedFormatError } from '../core/errors.js';
 import { validatePictures } from '../core/patch.js';
@@ -142,6 +142,17 @@ export async function buildFlacUpdate(
       ? parseVorbisComment(blocks[commentIndex]!.data)
       : { vendor: DEFAULT_VENDOR, comments: [] };
   const updatedFields = applyVorbisPatch(currentFields, patch);
+  // Native values win over the common mapping, but FLAC artwork must remain
+  // in PICTURE blocks for readers that do not inspect Vorbis artwork comments.
+  let pictures = patch.picture;
+  if (hasNativePicture(patch.native)) {
+    pictures = updatedFields.comments
+      .filter(comment => comment.key.toUpperCase() === 'METADATA_BLOCK_PICTURE')
+      .map(comment => decodeNativePicture(comment.value));
+    updatedFields.comments = updatedFields.comments.filter(
+      comment => comment.key.toUpperCase() !== 'METADATA_BLOCK_PICTURE'
+    );
+  }
   const commentData = serializeVorbisComment(updatedFields);
 
   if (commentIndex >= 0) {
@@ -150,7 +161,7 @@ export async function buildFlacUpdate(
     blocks.splice(1, 0, { type: BLOCK_TYPE.VORBIS_COMMENT, data: commentData });
   }
 
-  blocks = applyPicturePatch(blocks, patch.picture);
+  blocks = applyPicturePatch(blocks, pictures);
 
   const oldMetadataSize = parsed.audioOffset - parsed.id3Prefix.length;
   const nonPadding = blocks.filter(block => block.type !== BLOCK_TYPE.PADDING);
@@ -171,6 +182,24 @@ export async function buildFlacUpdate(
     paddingBytes: padding.length,
     bytesWritten: metadata.length + parsed.audioLength
   };
+}
+
+function hasNativePicture(native: TagPatch['native']): boolean {
+  return native != null && Object.keys(native).some(key => key.toUpperCase() === 'METADATA_BLOCK_PICTURE');
+}
+
+function decodeNativePicture(value: string): Picture {
+  const errorMessage = 'native.METADATA_BLOCK_PICTURE must contain valid base64 FLAC PICTURE data';
+  const normalized = value.replace(/\s/g, '');
+  const data = Buffer.from(normalized, 'base64');
+  if (data.toString('base64') !== normalized) {
+    throw new InvalidPatchError(errorMessage);
+  }
+  const picture = decodePicture(data, 0, {
+    requireExactData: true,
+    createError: () => new InvalidPatchError(errorMessage)
+  });
+  return { ...picture, type: picture.type ?? 'Other' };
 }
 
 function applyPicturePatch(blocks: FlacBlock[], pictures: readonly Picture[] | null | undefined): FlacBlock[] {
