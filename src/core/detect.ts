@@ -1,15 +1,17 @@
 import { fileTypeFromTokenizer } from 'file-type';
 import { EndOfStreamError, type ITokenizer } from 'strtok3';
+import { decodeAscii } from './bytes.js';
 import type { ByteSource } from './source.js';
 
-export type ContainerFormat = 'flac' | 'id3' | 'mp3' | 'wav' | 'mp4' | 'unknown';
+export type ContainerFormat = 'flac' | 'id3' | 'mp3' | 'wav' | 'mp4' | 'ogg' | 'unknown';
 
 /** Detect audio containers using file-type without loading the entire file. */
 export async function detectFormat(source: ByteSource): Promise<ContainerFormat> {
   if (source.size >= 12) {
     const header = await source.read(0, 12);
-    if (String.fromCharCode(...header.subarray(0, 4)) === 'RIFF' &&
-        String.fromCharCode(...header.subarray(8, 12)) === 'WAVE') return 'wav';
+    if (decodeAscii(header.subarray(0, 4)) === 'OggS') return 'ogg';
+    if (decodeAscii(header.subarray(0, 4)) === 'RIFF' &&
+        decodeAscii(header.subarray(8, 12)) === 'WAVE') return 'wav';
   }
   let extension: string | undefined;
   try {

@@ -8,7 +8,7 @@
 **Edit audio tags and cover art from Node.js without re-encoding the audio.**
 
 Fix an album title, organize a music library, embed artwork, or update MusicBrainz
-and ReplayGain metadata with the same API across FLAC, MP3, WAV and MP4 files.
+and ReplayGain metadata with the same API across FLAC, Ogg Vorbis/Opus, MP3, WAV and MP4 files.
 
 - **Change only what you need.** Unspecified tags and audio data are preserved.
 - **Use familiar tag names.** Write `title`, `artists`, `album`, `track` and more across formats.
@@ -37,6 +37,7 @@ These formats support both file and buffer updates:
 | Audio container | Extensions | Tags written |
 | --- | --- | --- |
 | **FLAC** | `.flac` | Vorbis Comments and native FLAC pictures |
+| **Ogg Vorbis/Opus** | `.ogg`, `.oga`, `.opus` | Vorbis Comments and embedded pictures (`METADATA_BLOCK_PICTURE`) |
 | **MP3** | `.mp3` | ID3v2.4; also creates tags on untagged MPEG audio |
 | **WAV** | `.wav` | ID3v2.4 in a RIFF/WAVE `id3 ` chunk |
 | **MP4 / M4A / M4B** | `.mp4`, `.m4a`, `.m4b` | iTunes-style metadata, including AAC and ALAC audio |
@@ -71,7 +72,7 @@ console.log(metadata.common.title); // New title
 console.log(metadata.common.track); // { no: 4, of: 12 }
 ```
 
-Use the same calls with a supported `.mp3`, `.wav`, `.m4a` or `.mp4` file.
+Use the same calls with a supported `.ogg`, `.oga`, `.opus`, `.mp3`, `.wav`, `.m4a` or `.mp4` file.
 
 ### Add or remove cover art
 
@@ -103,12 +104,12 @@ await writeFile('updated.mp3', output);
 
 ## Supported tags
 
-Common tag names work across formats. FLAC, MP3 and WAV provide a write
+Common tag names work across formats. FLAC, Ogg Vorbis/Opus, MP3 and WAV provide a write
 representation for every common field in `TagPatch`; the table below highlights
 the main groups. MP4 supports the fields listed in its column and rejects other
 common fields with an explicit error.
 
-| Group | FLAC, MP3 and WAV examples | MP4 fields |
+| Group | FLAC, Ogg Vorbis/Opus, MP3 and WAV examples | MP4 fields |
 | --- | --- | --- |
 | Titles and artists | `title`, `artist`, `artists`, `albumartist`, `albumartists`, `album` | Same |
 | Dates | `date`, `year`, `originaldate`, `originalyear`, `releasedate` | Same |
@@ -149,10 +150,13 @@ lyrics, picture attributes and ratings; see [format notes](#format-notes).
 | `track: null` | Remove the track number and total |
 | `picture: [...]` | Replace the embedded pictures |
 
-Use `disk` for disc numbers. In FLAC, `artists` takes precedence over `artist`
-when both are supplied; the same applies to `albumartists` and `albumartist`.
-MP4 uses the same precedence. MP3/WAV store display artists and individual artists
-in separate fields. A full `date` takes precedence over the `year` alias.
+Use `disk` for disc numbers. In FLAC and Ogg Vorbis/Opus, supplying both `artist`
+and `artists` stores them in `ARTIST` and `ARTISTS`, respectively, exposing the
+display artist and artist list separately rather than applying precedence.
+In FLAC, `albumartists` takes precedence over `albumartist` when both are supplied.
+In MP4, `artists` takes precedence over `artist`; the same applies to
+`albumartists` and `albumartist`. MP3/WAV store display artists and individual
+artists in separate fields. A full `date` takes precedence over the `year` alias.
 
 ### Native tags
 
@@ -161,7 +165,7 @@ apply after common fields, so they can override a common mapping.
 
 | Format | Example |
 | --- | --- |
-| FLAC / Vorbis Comments | `native: { MY_FIELD: 'Value' }` |
+| FLAC, Ogg Vorbis/Opus (Vorbis Comments) | `native: { MY_FIELD: 'Value' }` |
 | MP3 or WAV / ID3v2.4 | `native: { 'TXXX:MY_FIELD': 'Value' }` |
 | MP4 / iTunes | `native: { '----:com.apple.iTunes:MY_FIELD': 'Value' }` |
 
@@ -189,7 +193,7 @@ await updateFile('track.mp3', {
 });
 ```
 
-| Input | MP3/WAV | FLAC | MP4 |
+| Input | MP3/WAV | FLAC / Ogg Vorbis/Opus | MP4 |
 | --- | --- | --- | --- |
 | `'text'` | `USLT`, language `eng` | one `LYRICS` value | one `©lyr` value |
 | Text entry | `USLT` with language and descriptor | text in `LYRICS` | text in `©lyr` |
@@ -202,10 +206,10 @@ empty value. Text-only input replaces text lyrics and removes `SYLT`;
 synchronized-only input removes `USLT`. Use an entry with both properties when
 both representations should be kept.
 
-FLAC LRC output uses `[mm:ss.mmm]` and requires `timeStampFormat: 2` with a
+FLAC and Ogg Vorbis/Opus LRC output uses `[mm:ss.mmm]` and requires `timeStampFormat: 2` with a
 millisecond timestamp on every line. Reading that value through `music-metadata`
 and writing it back normalizes timestamp precision, so byte-identical LRC is not
-guaranteed. Use `native: { LYRICS: '...' }` to retain exact LRC text. FLAC does
+guaranteed. Use `native: { LYRICS: '...' }` to retain exact LRC text. FLAC and Ogg Vorbis/Opus do
 not store the language, descriptor, content type or timestamp format; MP4 stores
 text only. Synchronized-only MP4 input keeps the line text but loses timing.
 
@@ -227,14 +231,14 @@ console.log(result.format, result.bytesWritten, result.paddingBytes, result.atom
 | `atomic` | `true` | Stage output and rename it over the original; file API only |
 | `backup` | `false` | Copy the original to `<path>.bak` before replacement; file API only |
 | `dryRun` | `false` | Build the update and return the expected byte count without writing; file API only |
-| `padding` | `8192` | Control metadata padding for FLAC, MP3 and WAV; `0` removes padding. MP4 rejects this option |
+| `padding` | `8192` | Control metadata padding for FLAC, MP3 and WAV; `0` removes padding. MP4 and Ogg Vorbis/Opus reject this option |
 | `replaceId3` | `false` | Discard existing ID3 metadata and write a fresh ID3v2.4 tag; MP3 and WAV only |
 | `stripFlacId3` | `false` | Remove a nonstandard leading ID3 tag from FLAC; otherwise preserve it |
 
 Atomic updates require write access to the destination directory and space for a
 second copy. With `atomic: false`, MP3, FLAC and WAV stage output in memory and
-overwrite the original. MP4 stages on disk before copying over the original, so
-it still requires directory write access and temporary disk space.
+overwrite the original. MP4 and Ogg Vorbis/Opus stage on disk before copying over the original, so
+they still require directory write access and temporary disk space.
 
 Failures before atomic replacement leave the destination unchanged. A failed
 non-atomic overwrite can leave partial output. Backups are not transactional:
@@ -252,6 +256,21 @@ preserved unless `stripFlacId3` is enabled. A native `METADATA_BLOCK_PICTURE`
 takes precedence over the common `picture` mapping: base64 picture values are
 written as replacement `PICTURE` blocks, and `null` or an empty array removes
 them. The corresponding Vorbis artwork comment is removed to avoid duplicates.
+
+### Ogg Vorbis/Opus
+
+Ogg Vorbis/Opus supports common tags, native Vorbis comments and embedded pictures
+(`METADATA_BLOCK_PICTURE`). Unknown comments and vendor strings are preserved.
+Vorbis comment framing and trailing padding, as well as OpusTags padding and
+binary suffixes, are preserved. A continued first audio page,
+as produced by joining a live stream, is preserved. Audio packets, audio page
+boundaries and granule positions are retained; page sequence numbers and CRCs are
+rebuilt. File writes stage on disk, including non-atomic writes. Padding and ID3
+options are unsupported. A native `METADATA_BLOCK_PICTURE` takes precedence over
+the common `picture` mapping. Chained/multiplexed streams and pages sharing final
+headers and audio packets are rejected. Header packets are limited to 64 MiB;
+input and regenerated output streams are limited to 100,000 pages, including for
+file updates and dry runs.
 
 ### MP3 / ID3v2.4
 
@@ -296,12 +315,29 @@ Artwork accepts JPEG/PNG. Comments and lyrics store text without ID3-specific
 language, descriptors or timing information. Unsupported common fields fail
 explicitly rather than being silently omitted.
 
+### Mixed tag families and deletion
+
+A `null` field removes it from the format being edited, not from every tag
+family in the file. Readers merge families, so a preserved side tag can supply
+an older value after deletion. Default writes preserve those side tags byte for
+byte, including MP3 ID3v1, APEv2 and Lyrics3 trailers and leading FLAC ID3.
+
+For FLAC, use `stripFlacId3: true` together with the patch to physically remove
+the leading ID3 tag and prevent its values from resurfacing. For MP3,
+`replaceId3: true` removes leading ID3v2 and trailing ID3v1 and rebuilds ID3v2.4
+from the submitted patch; omitted fields are lost. It preserves APEv2 and
+Lyrics3. ID3v1 has removal support through replacement only; writing/updating
+ID3v1, and updating/removing/writing APEv2 or Lyrics3, are outside the editor's
+scope. Consequently MP3 replacement cannot guarantee global deletion when those
+preserved families contain competing values. Remove those families with another
+tool before using this editor when global deletion is required.
+
 ### Moving metadata between formats
 
 ID3 synchronized lyrics retain language, descriptor, content type and timestamp
 format. Vorbis timed lyrics use LRC with millisecond precision; MPEG-frame
 timestamps are rejected because conversion requires an audio timebase. Moving
-lyrics from MP3/WAV to FLAC or MP4 drops ID3-only attributes. Moving synchronized
+lyrics from MP3/WAV to FLAC, Ogg Vorbis/Opus or MP4 drops ID3-only attributes. Moving synchronized
 lyrics to MP4 keeps the line text but drops timing. See [Lyrics](#lyrics) for the
 accepted shapes and clearing semantics. ID3 ratings are quantized to POPM's byte
 scale, and MP4 artwork cannot retain all picture attributes.
@@ -336,6 +372,7 @@ src/
   id3v2/      ID3v2.4 frames and MP3 rewriting
   wav/        RIFF/WAVE chunks and embedded ID3 updates
   mp4/        iTunes metadata and chunk-offset relocation
+  ogg/        Ogg Vorbis/Opus pages and header rewriting
   vorbis/     Vorbis Comment serialization
   mapping/    common fields to native tags
 ```
@@ -352,20 +389,3 @@ npm run build
 ## License
 
 MIT. Mutagen was used as a behavioral reference; no GPL code is included.
-
-### Mixed tag families and deletion
-
-A `null` field removes it from the format being edited, not from every tag
-family in the file. Readers merge families, so a preserved side tag can supply
-an older value after deletion. Default writes preserve those side tags byte for
-byte, including MP3 ID3v1, APEv2 and Lyrics3 trailers and leading FLAC ID3.
-
-For FLAC, use `stripFlacId3: true` together with the patch to physically remove
-the leading ID3 tag and prevent its values from resurfacing. For MP3,
-`replaceId3: true` removes leading ID3v2 and trailing ID3v1 and rebuilds ID3v2.4
-from the submitted patch; omitted fields are lost. It preserves APEv2 and
-Lyrics3. ID3v1 has removal support through replacement only; writing/updating
-ID3v1, and updating/removing/writing APEv2 or Lyrics3, are outside the editor's
-scope. Consequently MP3 replacement cannot guarantee global deletion when those
-preserved families contain competing values. Remove those families with another
-tool before using this editor when global deletion is required.

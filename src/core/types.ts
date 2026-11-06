@@ -237,14 +237,15 @@ export interface WriteOptions {
   stripFlacId3?: boolean;
   /**
    * Target amount of padding to keep or add, in bytes. Defaults to 8192.
-   * MP4 does not add padding and rejects this option.
+   * MP4 and Ogg Vorbis/Opus do not add padding and reject this option.
    */
   padding?: PaddingOption;
   /**
    * Write through a temporary file and rename it into place. Defaults to
    * `true`. Only applies to `updateFile`. When false, stage output in memory
-   * and overwrite the existing file in place; MP4 instead stages on disk, requiring
-   * directory write access and space for a second copy. Neither overwrite is crash-atomic.
+   * and overwrite the existing file in place; MP4 and Ogg Vorbis/Opus instead
+   * stage on disk, requiring directory write access and space for a second
+   * copy. Neither overwrite is crash-atomic.
    */
   atomic?: boolean;
   /**
@@ -259,11 +260,11 @@ export interface WriteOptions {
 }
 
 /**
- * Result of a FLAC, MP3, WAV or MP4 write operation.
+ * Result of a FLAC, MP3, WAV, MP4 or Ogg Vorbis/Opus write operation.
  */
 export interface WriteResult {
   /** Container format that was written. */
-  format: 'flac' | 'mp3' | 'wav' | 'mp4';
+  format: 'flac' | 'mp3' | 'wav' | 'mp4' | 'ogg';
   /** Total number of bytes in the resulting file. */
   bytesWritten: number;
   /** Padding bytes in the resulting metadata section. */
