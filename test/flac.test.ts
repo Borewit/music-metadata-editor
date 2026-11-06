@@ -216,6 +216,127 @@ describe('FLAC writing', () => {
     expect(removed.common.picture).toBeUndefined();
   });
 
+  it('lets a native picture override the common picture patch', async () => {
+    const common = {
+      format: 'image/jpeg',
+      type: 'Cover (front)',
+      description: 'common',
+      data: Uint8Array.from([0xff, 0xd8, 0xff, 0xd9])
+    };
+    const nativePicture = { ...common, description: 'native' };
+    const nativeValue = Buffer.from(encodePicture(nativePicture)).toString('base64');
+
+    const overridden = await updateBuffer(makeFlac(), {
+      picture: [common],
+      native: { METADATA_BLOCK_PICTURE: nativeValue }
+    });
+    const overriddenTags = await readTags(overridden);
+    expect(overriddenTags.pictures).toHaveLength(1);
+    expect(overriddenTags.pictures[0]?.description).toBe('native');
+    const pictureBlocks = extractBlocks(overridden).filter(block => block.type === BlockType.PICTURE);
+    expect(pictureBlocks).toHaveLength(1);
+    expect(decodePicture(pictureBlocks[0]!.data).description).toBe('native');
+    expect(vorbisValues(overriddenTags, 'METADATA_BLOCK_PICTURE')).toEqual([]);
+
+    const removed = await updateBuffer(makeFlac(), {
+      picture: [common],
+      native: { METADATA_BLOCK_PICTURE: null }
+    });
+    const removedTags = await readTags(removed);
+    expect(removedTags.pictures).toHaveLength(0);
+    expect(removedTags.common.picture).toBeUndefined();
+
+    const existing = await updateBuffer(makeFlac(), { picture: [common] });
+    const nativeOnly = await updateBuffer(existing, { native: { METADATA_BLOCK_PICTURE: nativeValue } });
+    const nativeOnlyTags = await readTags(nativeOnly);
+    expect(nativeOnlyTags.pictures).toHaveLength(1);
+    expect(nativeOnlyTags.pictures[0]?.description).toBe('native');
+
+    const cleared = await updateBuffer(existing, { native: { METADATA_BLOCK_PICTURE: null } });
+    expect((await readTags(cleared)).pictures).toHaveLength(0);
+  });
+
+  it('writes multiple case-insensitive native pictures as FLAC blocks without duplicate comments', async () => {
+    const first = { format: 'image/png', description: 'front', data: Uint8Array.of(1, 2, 3), width: 32 };
+    const second = { ...first, description: 'back', width: 64 };
+    const values = [first, second].map(picture => Buffer.from(encodePicture(picture)).toString('base64'));
+    const audio = makeAudio(1024);
+    const input = makeFlac({
+      audio,
+      pictures: [first],
+      comments: [{ key: 'METADATA_BLOCK_PICTURE', value: values[0]! }]
+    });
+    const output = await updateBuffer(input, {
+      picture: null,
+      native: { metadata_block_picture: values }
+    });
+    const blocks = extractBlocks(output).filter(block => block.type === BlockType.PICTURE);
+    expect(blocks.map(block => decodePicture(block.data))).toEqual([
+      expect.objectContaining({ description: 'front', width: 32, data: first.data }),
+      expect.objectContaining({ description: 'back', width: 64, data: second.data })
+    ]);
+    const tags = await readTags(output);
+    expect(tags.pictures).toHaveLength(2);
+    expect(vorbisValues(tags, 'METADATA_BLOCK_PICTURE')).toEqual([]);
+    expect(vorbisValues(tags, 'metadata_block_picture')).toEqual([]);
+    expect(extractAudio(output)).toEqual(audio);
+    expect(await updateBuffer(output, {})).toEqual(output);
+  });
+
+  it.each([null, []])('removes native and comment artwork with a native %j patch', async value => {
+    const picture = { format: 'image/png', data: Uint8Array.of(1, 2, 3) };
+    const input = makeFlac({
+      pictures: [picture],
+      comments: [{ key: 'METADATA_BLOCK_PICTURE', value: Buffer.from(encodePicture(picture)).toString('base64') }]
+    });
+    const output = await updateBuffer(input, { picture: [picture], native: { metadata_block_picture: value } });
+    expect(extractBlocks(output).filter(block => block.type === BlockType.PICTURE)).toEqual([]);
+    expect((await readTags(output)).pictures).toEqual([]);
+  });
+
+  it.each([' ', '\t', '\n', '\r\n', '\f', '\v', ' \t\r\n'])(
+    'accepts whitespace %j in native base64 artwork',
+    async whitespace => {
+      const picture = { format: 'image/png', description: 'wrapped', data: Uint8Array.of(1, 2, 3) };
+      const encoded = encodePicture(picture);
+      const base64 = Buffer.from(encoded).toString('base64');
+      const value = whitespace + base64.match(/.{1,16}/g)!.join(whitespace) + whitespace;
+      const output = await updateBuffer(makeFlac(), { native: { METADATA_BLOCK_PICTURE: value } });
+      const blocks = extractBlocks(output).filter(block => block.type === BlockType.PICTURE);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]!.data).toEqual(encoded);
+      const tags = await readTags(output);
+      expect(tags.pictures).toHaveLength(1);
+      expect(tags.pictures[0]?.description).toBe('wrapped');
+      expect(vorbisValues(tags, 'METADATA_BLOCK_PICTURE')).toEqual([]);
+    }
+  );
+
+  it.each(['invalid-character', 'invalid-padding', 'truncated-picture', 'trailing-picture-data'])(
+    'rejects %s in whitespace-wrapped native artwork',
+    async kind => {
+      const picture = encodePicture({ format: 'image/png', data: Uint8Array.of(1, 2, 3) });
+      let base64 = Buffer.from(picture).toString('base64');
+      if (kind === 'invalid-character') base64 = '!' + base64;
+      if (kind === 'invalid-padding') base64 += '=';
+      if (kind === 'truncated-picture') base64 = Buffer.from(picture.subarray(0, -1)).toString('base64');
+      if (kind === 'trailing-picture-data') base64 = Buffer.concat([picture, Uint8Array.of(0)]).toString('base64');
+      await expect(updateBuffer(makeFlac(), { native: { METADATA_BLOCK_PICTURE: ` \n${base64}\r\n` } }))
+        .rejects.toThrow('native.METADATA_BLOCK_PICTURE must contain valid base64 FLAC PICTURE data');
+    }
+  );
+
+  it.each(['not base64!', Buffer.from(Uint8Array.of(1, 2, 3)).toString('base64')])(
+    'rejects invalid native picture data %j',
+    async value => {
+      const input = makeFlac();
+      const before = input.slice();
+      await expect(updateBuffer(input, { native: { METADATA_BLOCK_PICTURE: value } }))
+        .rejects.toThrow('native.METADATA_BLOCK_PICTURE must contain valid base64 FLAC PICTURE data');
+      expect(input).toEqual(before);
+    }
+  );
+
   it('is idempotent with a fixed padding policy', async () => {
     const input = makeFlac({ comments: [{ key: 'TITLE', value: 'Old' }] });
     const options = { padding: 4096 };

@@ -248,7 +248,10 @@ filesystem attribute, or serialize simultaneous updates.
 
 Writes Vorbis Comments and native `PICTURE` blocks, preserves unknown metadata
 blocks and encoded audio, and keeps or adds padding. A leading ID3 prefix is
-preserved unless `stripFlacId3` is enabled.
+preserved unless `stripFlacId3` is enabled. A native `METADATA_BLOCK_PICTURE`
+takes precedence over the common `picture` mapping: base64 picture values are
+written as replacement `PICTURE` blocks, and `null` or an empty array removes
+them. The corresponding Vorbis artwork comment is removed to avoid duplicates.
 
 ### MP3 / ID3v2.4
 
