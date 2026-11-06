@@ -42,6 +42,11 @@ export function decodeUtf8(data: Uint8Array): string {
   return textDecode(data, 'utf-8');
 }
 
+/** Decode bytes as ISO-8859-1, preserving one character per byte. */
+export function decodeAscii(data: Uint8Array): string {
+  return textDecode(data, 'latin1');
+}
+
 export function encodeUtf8(value: string): Uint8Array {
   return textEncode(value, 'utf-8');
 }

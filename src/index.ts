@@ -1,3 +1,4 @@
+import { buildOggUpdate } from './ogg/ogg.js';
 import { normalizeCommonPatch } from './mapping/common.js';
 import { buildMp4Update } from './mp4/mp4.js';
 import { buildWavUpdate } from './wav/wav.js';
@@ -6,11 +7,11 @@ import { parseFile, parseBuffer, type IAudioMetadata } from 'music-metadata';
 import { concatBytes } from './core/bytes.js';
 import { detectFormat, type ContainerFormat } from './core/detect.js';
 import { InvalidPatchError, UnsupportedFeatureError, UnsupportedFormatError } from './core/errors.js';
-import { openSource } from './core/source.js';
+import { openSource, type ByteSource } from './core/source.js';
 import type { ReadResult, TagPatch, WriteOptions, WriteResult } from './core/types.js';
 import { buildId3Update } from './id3v2/id3v2.js';
 import { buildFlacUpdate } from './flac/flac.js';
-import { writeChunks } from './core/writer.js';
+import { writeChunks, type WriteChunk } from './core/writer.js';
 
 export {
   InvalidFileError,
@@ -38,6 +39,25 @@ export type {
 } from './core/types.js';
 
 /**
+ * Rebuild a container whose metadata and audio are written as ordered chunks.
+ */
+function buildStreamedUpdate(
+  format: 'wav' | 'mp4' | 'ogg',
+  source: ByteSource,
+  patch: TagPatch,
+  options: WriteOptions
+): Promise<{ chunks: WriteChunk[]; paddingBytes: number }> {
+  switch (format) {
+    case 'wav':
+      return buildWavUpdate(source, patch, options);
+    case 'mp4':
+      return buildMp4Update(source, patch, options);
+    case 'ogg':
+      return buildOggUpdate(source, patch, options);
+  }
+}
+
+/**
  * Update tags in an audio file.
  *
  * The file is read with random access, the metadata section is rebuilt, and
@@ -55,11 +75,11 @@ export async function updateFile(filePath: string, patch: TagPatch, options: Wri
       throw new UnsupportedFeatureError('replaceId3 is only supported for MP3 and WAV');
     }
 
-    if (format === 'wav' || format === 'mp4') {
-      const update = await (format === 'mp4' ? buildMp4Update : buildWavUpdate)(source, patch, options);
+    if (format === 'wav' || format === 'mp4' || format === 'ogg') {
+      const update = await buildStreamedUpdate(format, source, patch, options);
       const result = await writeChunks(filePath, update.chunks, {
         atomic: options.atomic ?? true,
-        stageToFile: format === 'mp4',
+        stageToFile: format === 'mp4' || format === 'ogg',
         backup: options.backup ?? false,
         dryRun: options.dryRun ?? false,
         beforeReplace: () => source.close()
@@ -105,8 +125,8 @@ export async function updateBuffer(data: Uint8Array, patch: TagPatch, options: W
       throw new UnsupportedFeatureError('replaceId3 is only supported for MP3 and WAV');
     }
 
-    if (format === 'wav' || format === 'mp4') {
-      const update = await (format === 'mp4' ? buildMp4Update : buildWavUpdate)(source, patch, options);
+    if (format === 'wav' || format === 'mp4' || format === 'ogg') {
+      const update = await buildStreamedUpdate(format, source, patch, options);
       const output = new Uint8Array(update.chunks.reduce((sum, chunk) => sum + chunk.length, 0));
       let offset = 0;
       for (const chunk of update.chunks) {
@@ -183,8 +203,8 @@ function assertPatch(patch: TagPatch): void {
   }
 }
 
-function assertSupported(format: ContainerFormat): asserts format is 'flac' | 'id3' | 'mp3' | 'wav' | 'mp4' {
+function assertSupported(format: ContainerFormat): asserts format is 'flac' | 'id3' | 'mp3' | 'wav' | 'mp4' | 'ogg' {
   if (format === 'unknown') {
-    throw new UnsupportedFormatError('Unsupported audio format; supported formats are FLAC, WAV, MP4 and MP3/ID3v2.4');
+    throw new UnsupportedFormatError('Unsupported audio format; supported formats are FLAC, Ogg Vorbis/Opus, WAV, MP4 and MP3/ID3v2.4');
   }
 }

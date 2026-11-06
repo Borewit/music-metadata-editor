@@ -28,6 +28,15 @@ describe('Vorbis Comment codec', () => {
     expect(parseVorbisComment(encoded)).toEqual(fields);
   });
 
+  it('uses the parser entry limit for serialized comments', () => {
+    const comments = Array(1000000).fill({ key: 'A', value: '' });
+    const encoded = serializeVorbisComment({ vendor: '', comments });
+    expect(parseVorbisComment(encoded).comments).toHaveLength(1000000);
+    comments.push({ key: 'TITLE', value: 'Added' });
+    expect(() => serializeVorbisComment({ vendor: '', comments }))
+      .toThrow('Vorbis comment count 1000001 exceeds entry limit 1000000');
+  }, 30000);
+
   it('rejects malformed comments', () => {
     const encoded = serializeVorbisComment({
       vendor: 'v',
@@ -77,6 +86,37 @@ describe('Vorbis tag mapping', () => {
       { key: 'TRACKTOTAL', value: '10' },
       { key: 'CUSTOM', value: 'one' },
       { key: 'CUSTOM', value: 'two' }
+    ]);
+  });
+
+  it('appends picture comments without exceeding the argument limit', () => {
+    const pictureComments = Array.from({ length: 180000 }, (_, index) => ({
+      key: 'METADATA_BLOCK_PICTURE', value: String(index)
+    }));
+    const updated = applyVorbisPatch({ vendor: 'v', comments: [{ key: 'CUSTOM', value: 'keep' }] },
+      { picture: [] }, { pictureComments });
+    expect(updated.comments).toHaveLength(pictureComments.length + 1);
+    expect(updated.comments[0]).toEqual({ key: 'CUSTOM', value: 'keep' });
+    expect(updated.comments.slice(1)).toEqual(pictureComments);
+  });
+
+  it.each([{ picture: null }, { picture: [] }])('removes all artwork comments on an explicit picture update $picture', ({ picture }) => {
+    const fields = { vendor: 'v', comments: [
+      { key: 'METADATA_BLOCK_PICTURE', value: 'old' },
+      { key: 'coverart', value: 'legacy' },
+      { key: 'CoVeRaRtMiMe', value: 'image/png' },
+      { key: 'CUSTOM', value: 'keep' }
+    ] };
+    expect(applyVorbisPatch(fields, { title: 'Unrelated' }).comments.slice(0, 3))
+      .toEqual(fields.comments.slice(0, 3));
+    expect(applyVorbisPatch(fields, { picture }).comments).toEqual([{ key: 'CUSTOM', value: 'keep' }]);
+    expect(applyVorbisPatch(fields, {
+      picture, native: { COVERART: 'explicit', COVERARTMIME: 'image/jpeg' }
+    }, { pictureComments: [{ key: 'METADATA_BLOCK_PICTURE', value: 'new' }] }).comments).toEqual([
+      { key: 'CUSTOM', value: 'keep' },
+      { key: 'METADATA_BLOCK_PICTURE', value: 'new' },
+      { key: 'COVERART', value: 'explicit' },
+      { key: 'COVERARTMIME', value: 'image/jpeg' }
     ]);
   });
 

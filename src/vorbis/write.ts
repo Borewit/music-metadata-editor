@@ -1,8 +1,12 @@
 import { TokenWriter } from 'strtok3';
 import { textEncode } from '@borewit/text-codec';
 import { UINT32_LE } from 'token-types';
+import { InvalidPatchError } from '../core/errors.js';
 
 import type { VorbisFields } from 'music-metadata/tokens/vorbis';
+
+// Shared with both parser paths so successful writes remain re-editable.
+export const MAX_COMMENTS = 1_000_000;
 
 const MAX_UINT32 = 0xffffffff;
 
@@ -19,6 +23,9 @@ function assertLength(value: number, label: string): void {
  * spelling of unknown fields.
  */
 export function serializeVorbisComment(fields: VorbisFields): Uint8Array {
+  if (fields.comments.length > MAX_COMMENTS) {
+    throw new InvalidPatchError(`Vorbis comment count ${fields.comments.length} exceeds entry limit ${MAX_COMMENTS}`);
+  }
   const vendor = textEncode(fields.vendor, 'utf-8');
   assertLength(vendor.length, 'Vorbis vendor length');
   assertLength(fields.comments.length, 'Vorbis comment count');

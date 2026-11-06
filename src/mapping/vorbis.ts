@@ -120,13 +120,25 @@ const TEXT_FIELDS: readonly TextFieldMapping[] = [
   { patch: 'replaygain_album_peak', field: 'REPLAYGAIN_ALBUM_PEAK', multiple: false }
 ];
 
+export interface VorbisPatchOptions {
+  /**
+   * Comments representing a common `picture` patch. They are inserted before
+   * native fields, so an explicit `native.METADATA_BLOCK_PICTURE` still wins.
+   */
+  pictureComments?: readonly VorbisComment[];
+}
+
 /**
  * Apply a common/native tag patch to a Vorbis Comment block.
  *
  * Existing fields are updated in place, unknown fields are preserved, and
  * repeated values are supported.
  */
-export function applyVorbisPatch(fields: VorbisFields, patch: TagPatch): VorbisFields {
+export function applyVorbisPatch(
+  fields: VorbisFields,
+  patch: TagPatch,
+  options: VorbisPatchOptions = {}
+): VorbisFields {
   const comments = fields.comments.map(comment => ({ ...comment }));
   for (const key of EXTRA_COMMON_FIELDS) {
     if (patch[key] !== undefined) setField(comments, COMMON_FIELDS[key].vorbis, commonText(patch[key], key));
@@ -263,10 +275,16 @@ export function applyVorbisPatch(fields: VorbisFields, patch: TagPatch): VorbisF
     }
   }
 
-  // Pictures are written as native FLAC PICTURE blocks. Remove the legacy
-  // base64 Vorbis field when the caller explicitly updates pictures.
+  // Ogg supplies pictures as base64 comments and FLAC writes native PICTURE
+  // blocks. Remove all artwork fields when the caller explicitly updates
+  // pictures, then insert supplied comments before native fields are applied.
   if (patch.picture !== undefined) {
     removeField(comments, 'METADATA_BLOCK_PICTURE');
+    removeField(comments, 'COVERART');
+    removeField(comments, 'COVERARTMIME');
+    if (options.pictureComments) {
+      for (const comment of options.pictureComments) comments.push(comment);
+    }
   }
 
   if (patch.native !== undefined) {
