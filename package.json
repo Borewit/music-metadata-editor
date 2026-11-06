@@ -1,6 +1,6 @@
 {
   "name": "music-metadata-editor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Write metadata to common audio files",
   "type": "module",
   "sideEffects": false,
