@@ -1,5 +1,5 @@
 import { InvalidFileError, UnsupportedFeatureError } from '../core/errors.js';
-import { openSource, type ByteSource } from '../core/source.js';
+import { openSource, type ByteSource } from '../core/source.browser.js';
 import type { TagPatch, WriteOptions } from '../core/types.js';
 import type { WriteChunk } from '../core/writer.js';
 import { buildId3Update } from '../id3v2/id3v2.js';

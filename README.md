@@ -5,7 +5,7 @@
 [![CI](https://github.com/Borewit/music-metadata-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/Borewit/music-metadata-editor/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/Borewit/music-metadata-editor/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/Borewit/music-metadata-editor/actions/workflows/codeql-analysis.yml)
 
-**Edit audio tags and cover art from Node.js without re-encoding the audio.**
+**Edit audio tags and cover art from Node.js or the browser without re-encoding the audio.**
 
 Fix an album title, organize a music library, embed artwork, or update MusicBrainz
 and ReplayGain metadata with the same API across FLAC, Ogg Vorbis/Opus, MP3, WAV and MP4 files.
@@ -13,10 +13,11 @@ and ReplayGain metadata with the same API across FLAC, Ogg Vorbis/Opus, MP3, WAV
 - **Change only what you need.** Unspecified tags and audio data are preserved.
 - **Use familiar tag names.** Write `title`, `artists`, `album`, `track` and more across formats.
 - **Add or remove artwork.** Work with embedded pictures alongside text and numeric tags.
-- **Choose files or buffers.** Update a file on disk or get a new buffer in memory.
+- **Choose files, buffers, or Blobs.** Update a file on disk, get a new buffer in memory, or work with browser `Blob` objects.
 - **Write safely by default.** File updates use atomic replacement, with optional backups and dry runs.
+- **Cross-platform.** `updateBuffer` and `readTags` work in Node.js and modern browsers; `updateFile` is Node.js-only.
 
-[Quick start](#quick-start) · [Supported formats](#supported-formats) · [Supported tags](#supported-tags) ·
+[Quick start](#quick-start) · [Browser usage](#browser-usage) · [Supported formats](#supported-formats) · [Supported tags](#supported-tags) ·
 [Write options](#write-options) · [Format notes](#format-notes)
 
 ## How it works
@@ -54,7 +55,7 @@ Requires **Node.js 22 or later**. The package is **ESM-only**.
 npm install music-metadata-editor
 ```
 
-### Edit a file
+### Edit a file (Node.js)
 
 ```js
 import { readTags, updateFile } from 'music-metadata-editor';
@@ -74,7 +75,7 @@ console.log(metadata.common.track); // { no: 4, of: 12 }
 
 Use the same calls with a supported `.ogg`, `.oga`, `.opus`, `.mp3`, `.wav`, `.m4a` or `.mp4` file.
 
-### Add or remove cover art
+### Add or remove cover art (Node.js)
 
 ```js
 import { readFile } from 'node:fs/promises';
@@ -91,7 +92,7 @@ await updateFile('track.m4a', { picture: null });
 MP4 artwork accepts JPEG and PNG. Passing a `picture` array replaces the existing
 pictures; to keep them, omit the field.
 
-### Work with a buffer
+### Work with a buffer (Node.js)
 
 ```js
 import { readFile, writeFile } from 'node:fs/promises';
@@ -101,6 +102,85 @@ const input = await readFile('track.mp3');
 const output = await updateBuffer(input, { title: 'New title' });
 await writeFile('updated.mp3', output);
 ```
+
+## Browser usage
+
+The package provides a browser-compatible entry point via the `default` export condition.
+This entry point works in modern browsers and supports `Blob` and `Uint8Array` inputs.
+
+A plain browser page cannot resolve a bare `music-metadata-editor` import, so bundle the
+package with a bundler (Vite, esbuild, Rollup, …) or resolve it with an import map:
+
+```html
+<script type="importmap">
+{
+  "imports": {
+    "music-metadata-editor": "/path/to/dist/core/index.browser.js"
+  }
+}
+</script>
+```
+
+The import map must also resolve the package's dependencies
+(`music-metadata`, `file-type`, `strtok3`, `token-types`, `@borewit/text-codec`) to
+browser-compatible builds; a bundler handles this automatically.
+
+```html
+<script type="module">
+import { updateBuffer, readTags } from 'music-metadata-editor';
+
+// Read an audio file from an <input type="file"> element
+const fileInput = document.querySelector('input[type="file"]');
+
+fileInput.addEventListener('change', async () => {
+  const file = fileInput.files?.[0];
+  if (!file) return; // skip when no file is selected
+
+  // Update tags
+  const updatedBuffer = await updateBuffer(file, {
+    title: 'New title',
+    artists: ['Artist A'],
+    album: 'New album'
+  });
+
+  // Create a download link for the updated file, preserving the source MIME type
+  const updatedBlob = new Blob([updatedBuffer], { type: file.type });
+  const url = URL.createObjectURL(updatedBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'updated-' + file.name;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  // Read tags
+  const metadata = await readTags(file);
+  console.log(metadata.common.title);
+  console.log(metadata.common.artists);
+});
+</script>
+```
+
+### Using with Uint8Array in the browser
+
+```js
+import { updateBuffer, readTags } from 'music-metadata-editor';
+
+// If you have a Uint8Array (e.g., from fetch)
+const response = await fetch('track.mp3');
+const arrayBuffer = await response.arrayBuffer();
+const input = new Uint8Array(arrayBuffer);
+
+const output = await updateBuffer(input, { title: 'New title' });
+// output is a Uint8Array with the updated audio file
+```
+
+The browser entry point exports `updateBuffer` and `readTags`. The `updateFile` function
+is not available in the browser as it requires Node.js file system APIs.
+
+### Supported formats in the browser
+
+All formats supported in Node.js are also supported in the browser:
+FLAC, Ogg Vorbis/Opus, MP3, WAV, and MP4/M4A/M4B.
 
 ## Supported tags
 

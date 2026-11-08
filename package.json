@@ -8,8 +8,14 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "node": {
+        "import": "./dist/index.js",
+        "types": "./dist/index.d.ts"
+      },
+      "default": {
+        "import": "./dist/core/index.browser.js",
+        "types": "./dist/core/index.browser.d.ts"
+      }
     }
   },
   "files": [

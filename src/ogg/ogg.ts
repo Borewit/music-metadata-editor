@@ -1,4 +1,5 @@
 import { concatBytes, decodeAscii } from '../core/bytes.js';
+import { encodeBase64 } from '../core/base64.js';
 import { InvalidFileError, UnsupportedFeatureError } from '../core/errors.js';
 import { validatePictures } from '../core/patch.js';
 import type { ByteSource } from '../core/source.js';
@@ -165,7 +166,7 @@ export async function buildOggUpdate(
           const pictures = validatePictures(patch.picture);
           const pictureComments = pictures?.map(picture => ({
             key: 'METADATA_BLOCK_PICTURE',
-            value: Buffer.from(serializePicture(picture)).toString('base64')
+            value: encodeBase64(serializePicture(picture))
           })) ?? [];
           const prefixLength = opus ? 8 : 7;
           const parsed = parseVorbisCommentWithSuffix(packet.subarray(prefixLength));

@@ -1,6 +1,7 @@
 import { TokenWriter } from 'strtok3';
 import { BlockHeader, BlockType as BLOCK_TYPE, decodePicture } from 'music-metadata/tokens/flac';
 
+import { encodeBase64, decodeBase64 } from '../core/base64.js';
 import { InvalidFileError, InvalidPatchError, UnsupportedFormatError } from '../core/errors.js';
 import { validatePictures } from '../core/patch.js';
 import type { ByteSource } from '../core/source.js';
@@ -191,8 +192,8 @@ function hasNativePicture(native: TagPatch['native']): boolean {
 function decodeNativePicture(value: string): Picture {
   const errorMessage = 'native.METADATA_BLOCK_PICTURE must contain valid base64 FLAC PICTURE data';
   const normalized = value.replace(/\s/g, '');
-  const data = Buffer.from(normalized, 'base64');
-  if (data.toString('base64') !== normalized) {
+  const data = decodeBase64(normalized);
+  if (encodeBase64(data) !== normalized) {
     throw new InvalidPatchError(errorMessage);
   }
   const picture = decodePicture(data, 0, {
