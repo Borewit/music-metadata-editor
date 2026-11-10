@@ -71,7 +71,7 @@
   "dependencies": {
     "@borewit/text-codec": "^0.2.2",
     "file-type": "^22.3.0",
-    "music-metadata": "^12.3.4",
+    "music-metadata": "^12.3.5",
     "strtok3": "^10.7.0",
     "token-types": "^6.2.0"
   },
